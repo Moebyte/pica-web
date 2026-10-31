@@ -12,6 +12,9 @@ import 'package:pica_comic/components/window_frame.dart';
 import 'package:pica_comic/foundation/app.dart';
 import 'package:pica_comic/foundation/app_page_route.dart';
 import 'package:pica_comic/foundation/log.dart';
+import 'package:pica_comic/foundation/nav_snapshot.dart';
+import 'package:pica_comic/foundation/web_history_bridge.dart';
+import 'package:pica_comic/foundation/web_url_strategy.dart';
 import 'package:pica_comic/init.dart';
 import 'package:pica_comic/network/http_client.dart';
 import 'package:pica_comic/pages/auth_page.dart';
@@ -28,6 +31,9 @@ import 'network/webdav.dart';
 bool notFirstUse = false;
 
 void main(List<String> args) {
+  // Web: take over browser history before Flutter initializes its own
+  // sentinel/popstate handling (see web_url_strategy.dart).
+  disableFlutterBrowserHistory();
   // Desktop webview title bar is not applicable in the browser.
   if (!kIsWeb && runWebViewTitleBarWidget(args)) {
     return;
@@ -40,8 +46,21 @@ void main(List<String> args) {
           "${details.exception}\n${details.stack}");
     };
     notFirstUse = appdata.firstUse[3] == "1";
+    // Web: read the navigation snapshot before building the first route so the
+    // main page can start on the tab the user was on. The rest of the stack is
+    // replayed after the first frame.
+    NavSnapshot.init();
+    if (!notFirstUse) {
+      NavSnapshot.discardRestorePlan();
+    }
     setNetworkProxy();
     runApp(const MyApp());
+    if (kIsWeb) {
+      WebHistoryBridge.install();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Future.delayed(const Duration(milliseconds: 150), NavSnapshot.replay);
+      });
+    }
     if (App.isDesktop) {
       await windowManager.ensureInitialized();
       windowManager.waitUntilReadyToShow().then((_) async {
@@ -217,7 +236,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           builder: (context) => notFirstUse
               ? (appdata.settings[13] == "1"
               ? const AuthPage()
-              : const MainPage())
+              : MainPage(initialTab: NavSnapshot.restoredMainTab))
               : const WelcomePage(),
         ),
         localizationsDelegates: const [

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:pica_comic/base.dart';
 import 'package:pica_comic/components/components.dart';
 import 'package:pica_comic/foundation/app_page_route.dart';
+import 'package:pica_comic/foundation/nav_snapshot.dart';
 import 'package:pica_comic/network/webdav.dart';
 import 'package:pica_comic/tools/app_links.dart';
 import 'package:pica_comic/tools/background_service.dart';
@@ -53,7 +54,10 @@ void checkClipboard() async {
 }
 
 class MainPage extends StatefulWidget {
-  const MainPage({Key? key}) : super(key: key);
+  const MainPage({Key? key, this.initialTab}) : super(key: key);
+
+  /// Tab restored from the previous browser session (web refresh).
+  final int? initialTab;
 
   static MainPageState of(BuildContext context) {
     return context.findAncestorStateOfType<MainPageState>()!;
@@ -67,6 +71,10 @@ class MainPageState extends State<MainPage> {
   GlobalKey<NavigatorState>? _navigatorKey;
 
   late final NaviObserver _observer;
+
+  late final int _initialTab;
+
+  Object? _navSnapshotToken;
 
   void to(Widget Function() widget, {bool preventDuplicate = false}) async {
     if (preventDuplicate) {
@@ -190,6 +198,9 @@ class MainPageState extends State<MainPage> {
   void initState() {
     _navigatorKey = GlobalKey();
     App.mainNavigatorKey = _navigatorKey;
+    _initialTab = (widget.initialTab ?? int.parse(appdata.settings[23]))
+        .clamp(0, 3);
+    _navSnapshotToken = NavSnapshot.enter(NavSnapshot.mainData(_initialTab));
     _login();
     notifications.requestPermission();
     notifications.cancelAll();
@@ -208,9 +219,15 @@ class MainPageState extends State<MainPage> {
   }
 
   @override
+  void dispose() {
+    NavSnapshot.leave(_navSnapshotToken);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return NaviPane(
-      initialPage: int.parse(appdata.settings[23]),
+      initialPage: _initialTab,
       observer: _observer,
       paneItems: [
         PaneItemEntry(
@@ -255,6 +272,7 @@ class MainPageState extends State<MainPage> {
       },
       onPageChange: (index) {
         HapticFeedback.selectionClick();
+        NavSnapshot.setMainTab(index);
         _navigatorKey!.currentState?.pushAndRemoveUntil(
             AppPageRoute(
                 preventRebuild: false,

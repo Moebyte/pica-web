@@ -334,6 +334,24 @@ class ComicReadingPageLogic extends StateController {
 
   bool isFullScreen = false;
 
+  /// True when the browser (rather than the desktop window manager) is in
+  /// fullscreen mode.
+  bool get isWebFullScreen => App.isWeb && isWebFullscreen;
+
+  /// Toolbar / settings fullscreen toggle for the web reader.
+  Future<void> toggleWebFullscreen() async {
+    if (!App.isWeb) {
+      fullscreen();
+      return;
+    }
+    if (isWebFullscreen) {
+      await exitFullscreen();
+    } else {
+      await enterFullscreen();
+    }
+    update();
+  }
+
   void fullscreen(){
     const channel = MethodChannel("pica_comic/full_screen");
     channel.invokeMethod("set", !isFullScreen);
@@ -348,7 +366,9 @@ class ComicReadingPageLogic extends StateController {
   }
 
   void handleKeyboard(KeyEvent event) {
-    if(event is KeyDownEvent || event is KeyRepeatEvent){
+    if (event is KeyDownEvent || event is KeyRepeatEvent) {
+      // Do not steal keys from text fields (search boxes, dialogs, ...).
+      if (isEditingText) return;
       bool reverse = appdata.settings[9] == "2" || appdata.settings[9] == "6";
       switch (event.logicalKey) {
         case LogicalKeyboardKey.arrowDown:
@@ -357,11 +377,40 @@ class ComicReadingPageLogic extends StateController {
         case LogicalKeyboardKey.arrowUp:
         case LogicalKeyboardKey.arrowLeft:
           reverse ? jumpToNextPage(): jumpToLastPage();
+        case LogicalKeyboardKey.pageDown:
+          jumpToNextPage();
+        case LogicalKeyboardKey.pageUp:
+          jumpToLastPage();
+        case LogicalKeyboardKey.space:
+          if (HardwareKeyboard.instance.isShiftPressed) {
+            jumpToLastPage();
+          } else {
+            jumpToNextPage();
+          }
+        case LogicalKeyboardKey.escape:
+          if (tools) {
+            tools = false;
+            update();
+            SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersive);
+          } else {
+            // Closes an open settings sheet first; otherwise exits the reader.
+            App.globalBack();
+          }
         case LogicalKeyboardKey.f12:
           fullscreen();
       }
     }
   }
+
+  /// Keyboard events must not be turned into page flips while a text field
+  /// (e.g. a dialog input) has focus.
+  bool get isEditingText {
+    final context = FocusManager.instance.primaryFocus?.context;
+    if (context == null) return false;
+    if (context.widget is EditableText) return true;
+    return context.findAncestorWidgetOfExactType<EditableText>() != null;
+  }
+
 
   late final void Function() openEpsView;
 }

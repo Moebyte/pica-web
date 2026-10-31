@@ -15,6 +15,7 @@ import 'package:pica_comic/foundation/image_loader/stream_image_provider.dart';
 import 'package:pica_comic/foundation/image_manager.dart';
 import 'package:pica_comic/foundation/local_favorites.dart';
 import 'package:pica_comic/foundation/log.dart';
+import 'package:pica_comic/foundation/nav_snapshot.dart';
 import 'package:pica_comic/foundation/stack.dart' as stack;
 import 'package:pica_comic/foundation/ui_mode.dart';
 import 'package:pica_comic/network/base_comic.dart';
@@ -793,6 +794,11 @@ abstract class BaseComicPage<T extends Object> extends StatelessWidget {
 
   String get sourceKey;
 
+  /// Id used to restore this page after a browser refresh. Most pages use
+  /// [id]; pages whose displayed id differs from the source lookup id (e.g.
+  /// hitomi links) override it.
+  String get navSnapshotId => id;
+
   void scrollListener() {
     try {
       var logic = _logic;
@@ -813,7 +819,9 @@ abstract class BaseComicPage<T extends Object> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, constraints) {
+    return NavSnapshotScope(
+      data: NavSnapshot.comicData(sourceKey, navSnapshotId),
+      child: LayoutBuilder(builder: (context, constraints) {
       return Scaffold(
         body: StateBuilder<ComicPageLogic<T>>(
           tag: tag,
@@ -860,7 +868,8 @@ abstract class BaseComicPage<T extends Object> extends StatelessWidget {
           },
         ),
       );
-    });
+      }),
+    );
   }
 
   Widget buildLoading(BuildContext context) {

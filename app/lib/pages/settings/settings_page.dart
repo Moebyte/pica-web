@@ -16,6 +16,7 @@ import 'package:pica_comic/base.dart';
 import 'package:pica_comic/comic_source/built_in/picacg.dart';
 import 'package:pica_comic/comic_source/built_in/jm.dart';
 import 'package:pica_comic/foundation/cache_manager.dart';
+import 'package:pica_comic/foundation/nav_snapshot.dart';
 import 'package:pica_comic/foundation/ui_mode.dart';
 import 'package:pica_comic/main.dart';
 import 'package:pica_comic/network/app_dio.dart';
@@ -73,6 +74,8 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> implements PopEntry{
   int currentPage = -1;
 
+  Object? _navSnapshotToken;
+
   ColorScheme get colors => Theme.of(context).colorScheme;
 
   bool get enableTwoViews => !UiMode.m1(context);
@@ -109,6 +112,7 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
 
   @override
   void initState() {
+    _navSnapshotToken = NavSnapshot.enter(NavSnapshot.pageData("settings"));
     currentPage = widget.initialPage;
     gestureRecognizer = HorizontalDragGestureRecognizer(debugOwner: this)
       ..onUpdate = ((details) => setState(() => offset += details.delta.dx))
@@ -156,6 +160,7 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
 
   @override
   dispose() {
+    NavSnapshot.leave(_navSnapshotToken);
     super.dispose();
     gestureRecognizer.dispose();
     App.temporaryDisablePopGesture = false;

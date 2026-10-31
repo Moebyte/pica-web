@@ -387,6 +387,17 @@ extension ToolBar on ComicReadingPage {
                           ),
                         ),
                         //const Spacer(),
+                        if (App.isWeb)
+                          Tooltip(
+                            message: "全屏".tl,
+                            child: IconButton(
+                              iconSize: 25,
+                              icon: Icon(logic.isWebFullScreen
+                                  ? Icons.fullscreen_exit
+                                  : Icons.fullscreen),
+                              onPressed: () => logic.toggleWebFullscreen(),
+                            ),
+                          ),
                         Padding(
                           padding: const EdgeInsets.fromLTRB(10, 0, 10, 0),
                           child: Tooltip(
@@ -423,7 +434,7 @@ extension ToolBar on ComicReadingPage {
   Widget buildPageInfoText(
       ComicReadingPageLogic comicReadingPageLogic, BuildContext context) {
     return Positioned(
-      bottom: 13,
+      bottom: 13 + MediaQuery.of(context).padding.bottom,
       left: 25,
       child: StateBuilder<ComicReadingPageLogic>(
         id: "ToolBar",

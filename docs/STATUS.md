@@ -352,3 +352,45 @@ GatewaySync 扩展为多键：`account` / `history` / `favorites`（均为网关
 
 - `Refused to set unsafe header "user-agent"`：列表封面 `Image.network` 带头导致，浏览器拒绝但图片仍正常。
 - 源站 5xx / JM 死线路探测的 4xx：上游行为，非前端异常。
+
+---
+
+## 12. 移动浏览器适配 + 刷新保持当前页 + 阅读器增强（2026-11-01）
+
+### 12.1 浏览器返回 = 应用内返回（右滑/返回键/PWA）
+
+- 关闭 Flutter Web 引擎自带的 `SingleEntryBrowserHistory`（`setUrlStrategy(null)`），
+  由自建 `WebHistoryBridge` 接管：启动时留一个哨兵历史条目，`popstate` 时
+  根 Navigator 可弹则 `pop()` 并补回哨兵，根页面时放行让浏览器退出应用。
+- 效果：手机右滑返回、安卓返回键、桌面返回按钮都先关对话框/弹页面，不再直接退出。
+- 实测：详情页 `history.back()` → 回探索且应用未退出；阅读器返回 → 回上一页。
+
+### 12.2 刷新保持当前页（不再回首页）
+
+- `NavSnapshot`：页面级快照栈（main tab / comic / reader / search / history / downloads / settings），
+  300ms 合并写入 `sessionStorage`，`pagehide`/hidden 立即 flush。
+- 启动首帧后按序零动画重放；阅读器按源调接口重建，**恢复到当时章节与页码**。
+- 实测：阅读器第 6 页刷新 → 仍 6/28；详情页刷新 → 原地不动；无快照 → 正常首页。
+- 已知限制：在阅读器里刷新后再按返回会回到首页（重建时中间详情路由未入栈）；
+  快照仅限同一标签页；对话框不恢复。
+
+### 12.3 移动端 meta/CSS
+
+- 显式 viewport（device-width、禁缩放、viewport-fit=cover，并用 MutationObserver 防止引擎改回）；
+  `overscroll-behavior:none` 禁下拉刷新整页重载与橡皮筋；theme-color 深色；
+  manifest：名称/中文描述/深色主题/移除 orientation 锁。
+
+### 12.4 阅读器增强
+
+- **屏幕常亮**：移动 Web 用 Screen Wake Lock（遵循设置项，隐藏释放、可见重取，失败静默）。
+- **沉浸全屏**：手机进阅读器自动 requestFullscreen，退出时退出；顶栏与阅读设置提供手动切换。
+- **触摸手势**：单页左右滑动翻页、点按左右区域/中间显隐 UI、双击/长按缩放均实测通过。
+- **键盘**：←→、空格、PageUp/PageDown、Esc（输入框聚焦时不拦截）。
+- **离页保存**：visibilitychange/pagehide 立即写进度，刷新不丢最后几页。
+- 设置面板隐藏 Web 无意义项（音量键/方向锁），保留翻页模式/自动翻页/预加载。
+
+### 12.5 已知未覆盖
+
+- 账号管理页等少数次级页面不在快照恢复范围（刷新会回首页）。
+- iOS Safari 边缘右滑转场动画由浏览器控制，无法完全屏蔽；PWA standalone 行为可能略有差异。
+- Wake Lock 需 HTTPS 且浏览器支持；刷新恢复的阅读器因无用户手势可能不能自动全屏，需手动按钮。

@@ -37,6 +37,9 @@ class HitomiComicPage extends BaseComicPage<HitomiComic> {
   String? get url => link;
 
   @override
+  String get navSnapshotId => link;
+
+  @override
   void openFavoritePanel() {
     favoriteComic(FavoriteComicWidget(
       havePlatformFavorite: false,

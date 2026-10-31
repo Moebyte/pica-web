@@ -146,22 +146,23 @@ class _ReadingSettingsState extends State<ReadingSettings> {
               }),
             ),
           ),
-          ListTile(
-            leading: const Icon(Icons.volume_mute),
-            title: Text("使用音量键翻页".tl),
-            trailing: Switch(
-              value: useVolumeKeyChangePage,
-              onChanged: (b) {
-                b ? appdata.settings[7] = "1" : appdata.settings[7] = "0";
-                setState(() {
-                  useVolumeKeyChangePage = b;
-                });
-                appdata.writeData();
-                logic.update();
-              },
+          if (!App.isWeb)
+            ListTile(
+              leading: const Icon(Icons.volume_mute),
+              title: Text("使用音量键翻页".tl),
+              trailing: Switch(
+                value: useVolumeKeyChangePage,
+                onChanged: (b) {
+                  b ? appdata.settings[7] = "1" : appdata.settings[7] = "0";
+                  setState(() {
+                    useVolumeKeyChangePage = b;
+                  });
+                  appdata.writeData();
+                  logic.update();
+                },
+              ),
+              onTap: () {},
             ),
-            onTap: () {},
-          ),
           ListTile(
             leading: const Icon(Icons.timer_sharp),
             subtitle: SizedBox(
@@ -200,10 +201,13 @@ class _ReadingSettingsState extends State<ReadingSettings> {
             ),
             title: Text("自动翻页时间间隔".tl),
           ),
-          if (App.isAndroid)
+          if (App.isAndroid || App.isWeb)
             ListTile(
               leading: const Icon(Icons.screenshot_outlined),
               title: Text("保持屏幕常亮".tl),
+              subtitle: App.isWeb
+                  ? Text("Wake Lock 需浏览器支持".tl)
+                  : null,
               onTap: () {},
               trailing: Switch(
                 value: keepScreenOn,
@@ -215,6 +219,21 @@ class _ReadingSettingsState extends State<ReadingSettings> {
                   });
                   appdata.writeData();
                 },
+              ),
+            ),
+          if (App.isWeb)
+            ListTile(
+              leading: const Icon(Icons.fullscreen),
+              title: Text("全屏".tl),
+              subtitle: Text("沉浸式阅读（浏览器支持时）".tl),
+              onTap: () async {
+                await logic.toggleWebFullscreen();
+                if (mounted) setState(() {});
+              },
+              trailing: Icon(
+                logic.isWebFullScreen
+                    ? Icons.fullscreen_exit
+                    : Icons.fullscreen,
               ),
             ),
           ListTile(

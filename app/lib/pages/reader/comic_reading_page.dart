@@ -32,6 +32,8 @@ import 'package:pica_comic/pages/comic_page.dart';
 import 'package:pica_comic/tools/keep_screen_on.dart';
 import 'package:pica_comic/foundation/image_manager.dart';
 import 'package:pica_comic/foundation/history.dart';
+import 'package:pica_comic/foundation/nav_snapshot.dart';
+import 'package:pica_comic/foundation/web_runtime.dart';
 import 'package:pica_comic/tools/save_image.dart';
 import 'package:pica_comic/tools/time.dart';
 import 'package:pica_comic/network/jm_network/jm_network.dart';
@@ -62,6 +64,16 @@ part 'reading_settings.dart';
 
 part 'reading_data.dart';
 
+/// Bookkeeping for the reader's navigation snapshot entry and page lifecycle
+/// listener. `ComicReadingPage` is immutable, so mutable handles live here.
+class _NavReaderState {
+  Object? token;
+
+  void Function(bool hidden)? lifecycleListener;
+
+  bool Function(KeyEvent event)? keyHandler;
+}
+
 ///阅读器
 class ComicReadingPage extends StatelessWidget {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -73,6 +85,10 @@ class ComicReadingPage extends StatelessWidget {
   final int initialPage;
 
   final int initialEp;
+
+  /// Mutable bookkeeping for the web navigation snapshot / page lifecycle.
+  /// Kept in a holder so this widget stays immutable.
+  final _NavReaderState _nav = _NavReaderState();
 
   ReadingType get type => readingData.type;
 
@@ -192,6 +208,10 @@ class ComicReadingPage extends StatelessWidget {
     }
     history!.maxPage = logic.length;
     HistoryManager().saveReadHistory(history!, updateMePage);
+    NavSnapshot.update(_nav.token, {
+      "ep": logic.order,
+      "page": logic.index,
+    });
   }
 
   bool get useDarkBackground => appdata.appSettings.useDarkBackground;
@@ -200,6 +220,68 @@ class ComicReadingPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return StateBuilder<ComicReadingPageLogic>(initState: (logic) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersive);
+      _nav.token = NavSnapshot.enter(NavSnapshot.readerData(
+        source: readingData.sourceKey,
+        id: readingData.id,
+        ep: logic.order,
+        page: logic.index,
+        detailId: readingData is HitomiReadingData
+            ? (readingData as HitomiReadingData).link
+            : null,
+      ));
+      // Persist progress when the tab is hidden or the page is being
+      // unloaded, before Flutter's dispose callbacks get a chance to run.
+      _nav.lifecycleListener = (hidden) {
+        if (!hidden) return;
+        try {
+          if (history != null) {
+            _updateHistory(logic, false);
+          }
+          NavSnapshot.flush();
+        } catch (e) {
+          // Never let progress saving break the reader.
+        }
+      };
+      addPageLifecycleListener(_nav.lifecycleListener!);
+      // PageUp/PageDown are consumed by scrollables in the focused subtree,
+      // so handle them (and Esc) at the hardware-keyboard level before focus
+      // dispatch. Arrow keys / space stay on the KeyboardListener.
+      _nav.keyHandler = (event) {
+        try {
+          if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+            return false;
+          }
+          final logic = StateController.findOrNull<ComicReadingPageLogic>();
+          if (logic == null || logic.isEditingText) return false;
+          switch (event.logicalKey) {
+            case LogicalKeyboardKey.pageUp:
+              logic.jumpToLastPage();
+              return true;
+            case LogicalKeyboardKey.pageDown:
+              logic.jumpToNextPage();
+              return true;
+            case LogicalKeyboardKey.escape:
+              if (logic.tools) {
+                logic.tools = false;
+                logic.update();
+                SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersive);
+              } else {
+                App.globalBack();
+              }
+              return true;
+          }
+        } catch (_) {
+          // Never let a keyboard shortcut break reading.
+        }
+        return false;
+      };
+      HardwareKeyboard.instance.addHandler(_nav.keyHandler!);
+      if (App.isWeb && isMobileBrowser) {
+        // Tapping a comic and entering the reader is a user activation, so the
+        // browser usually grants fullscreen here. Failure is silent; the
+        // toolbar / settings provide a manual toggle.
+        enterFullscreen();
+      }
       if (appdata.settings[14] == "1") {
         setKeepScreenOn();
       }
@@ -264,6 +346,19 @@ class ComicReadingPage extends StatelessWidget {
       if (useDarkBackground) {
         Future.microtask(() =>
             StateController.findOrNull<WindowFrameController>()?.resetTheme());
+      }
+      if (_nav.keyHandler != null) {
+        HardwareKeyboard.instance.removeHandler(_nav.keyHandler!);
+        _nav.keyHandler = null;
+      }
+      if (_nav.lifecycleListener != null) {
+        removePageLifecycleListener(_nav.lifecycleListener!);
+      }
+      NavSnapshot.leave(_nav.token);
+      _nav.token = null;
+      if (App.isWeb) {
+        // Leave the browser fullscreen when closing the reader.
+        exitFullscreen();
       }
     }, builder: (logic) {
       return DefaultTextStyle.merge(

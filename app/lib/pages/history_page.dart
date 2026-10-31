@@ -5,6 +5,7 @@ import 'package:pica_comic/network/picacg_network/models.dart';
 import 'package:pica_comic/pages/comic_page.dart';
 import 'package:pica_comic/tools/time.dart';
 import 'package:pica_comic/foundation/history.dart';
+import 'package:pica_comic/foundation/nav_snapshot.dart';
 import '../base.dart';
 import '../foundation/app.dart';
 import 'package:pica_comic/tools/translations.dart';
@@ -24,9 +25,16 @@ class _HistoryPageState extends State<HistoryPage> {
   String keyword = "";
   var results = <History>[];
   bool isModified = false;
+  Object? _navSnapshotToken;
+  @override
+  void initState() {
+    _navSnapshotToken = NavSnapshot.enter(NavSnapshot.pageData("history"));
+    super.initState();
+  }
 
   @override
   void dispose() {
+    NavSnapshot.leave(_navSnapshotToken);
     if (isModified) {
       appdata.history.saveData();
     }

@@ -6,6 +6,7 @@ import 'package:pica_comic/base.dart';
 import 'package:pica_comic/comic_source/comic_source.dart';
 import 'package:pica_comic/components/components.dart';
 import 'package:pica_comic/foundation/app.dart';
+import 'package:pica_comic/foundation/nav_snapshot.dart';
 import 'package:pica_comic/foundation/pair.dart';
 import 'package:pica_comic/network/base_comic.dart';
 import 'package:pica_comic/network/res.dart';
@@ -111,6 +112,15 @@ class _SearchResultPageState extends State<_SearchResultPage> {
   late _SuggestionsController suggestionsController;
   late var sourceKey = widget.sourceKey;
   late var options = widget.options;
+  Object? _navSnapshotToken;
+
+  void _updateNavSnapshot() {
+    NavSnapshot.update(_navSnapshotToken, {
+      "source": sourceKey,
+      "query": keyword,
+      "options": List<String>.from(options),
+    });
+  }
 
   @override
   void initState() {
@@ -124,11 +134,17 @@ class _SearchResultPageState extends State<_SearchResultPage> {
       }
     }
     suggestionsController = _SuggestionsController(controller);
+    _navSnapshotToken = NavSnapshot.enter(NavSnapshot.searchData(
+      source: widget.sourceKey,
+      query: widget.keyword,
+      options: List<String>.from(widget.options),
+    ));
     super.initState();
   }
 
   @override
   void dispose() {
+    NavSnapshot.leave(_navSnapshotToken);
     if (suggestionOverlay != null) {
       suggestionsController.remove();
     }
@@ -168,6 +184,7 @@ class _SearchResultPageState extends State<_SearchResultPage> {
       setState(() {
         keyword = controller.text;
       });
+      _updateNavSnapshot();
     }
   }
 
@@ -207,6 +224,7 @@ class _SearchResultPageState extends State<_SearchResultPage> {
                 setState(() {
                   keyword = s;
                 });
+                _updateNavSnapshot();
               },
             )
           : null,
@@ -246,6 +264,7 @@ class _SearchResultPageState extends State<_SearchResultPage> {
                   setState(() {
                     keyword = s;
                   });
+                  _updateNavSnapshot();
                 },
                 controller: controller,
                 onChanged: onChanged,
@@ -338,6 +357,7 @@ class _SearchResultPageState extends State<_SearchResultPage> {
                       this.setState(() {
                         this.sourceKey = sourceKey!;
                       });
+                      _updateNavSnapshot();
                     }
                   }
                 },
@@ -360,6 +380,7 @@ class _SearchResultPageState extends State<_SearchResultPage> {
           setState(() {
             this.options = options;
           });
+          _updateNavSnapshot();
         },
       ),
     );

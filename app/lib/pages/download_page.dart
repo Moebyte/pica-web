@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:pica_comic/base.dart';
 import 'package:pica_comic/comic_source/comic_source.dart';
 import 'package:pica_comic/foundation/history.dart';
+import 'package:pica_comic/foundation/nav_snapshot.dart';
 import 'package:pica_comic/network/app_dio.dart';
 import 'package:pica_comic/network/base_comic.dart';
 import 'package:pica_comic/network/custom_download_model.dart';
@@ -217,7 +218,9 @@ class DownloadPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return StateBuilder<DownloadPageLogic>(
+    return NavSnapshotScope(
+      data: NavSnapshot.pageData("download"),
+      child: StateBuilder<DownloadPageLogic>(
         init: DownloadPageLogic(),
         builder: (logic) {
           if (logic.loading) {
@@ -244,7 +247,9 @@ class DownloadPage extends StatelessWidget {
               ),
             );
           }
-        });
+        },
+      ),
+    );
   }
 
   Widget buildComics(BuildContext context, DownloadPageLogic logic) {
