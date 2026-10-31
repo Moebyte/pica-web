@@ -1,0 +1,228 @@
+/* Global styles + theme tokens. Dark is the default; light overrides below. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #101014;
+  --bg-soft: #16161c;
+  --card: #1b1b23;
+  --card-hover: #22222c;
+  --text: #ececf1;
+  --text-dim: #9a9aa6;
+  --text-faint: #6c6c78;
+  --border: #26262f;
+  --accent: #7c6cf0;
+  --accent-soft: rgba(124, 108, 240, 0.16);
+  --accent-text: #b7adff;
+  --danger: #e5616b;
+  --danger-soft: rgba(229, 97, 107, 0.14);
+  --ok: #4cc38a;
+  --warn: #e0a84a;
+  --info: #5aa7e8;
+  --skeleton-a: #1d1d26;
+  --skeleton-b: #262633;
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --topbar-bg: rgba(16, 16, 20, 0.86);
+  --overlay: rgba(8, 8, 12, 0.72);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f5f5f8;
+  --bg-soft: #ffffff;
+  --card: #ffffff;
+  --card-hover: #f0f0f6;
+  --text: #1d1d24;
+  --text-dim: #5f5f6e;
+  --text-faint: #93939f;
+  --border: #e3e3ec;
+  --accent: #6554e0;
+  --accent-soft: rgba(101, 84, 224, 0.1);
+  --accent-text: #5346c4;
+  --danger: #d33b49;
+  --danger-soft: rgba(211, 59, 73, 0.1);
+  --ok: #1f9d63;
+  --warn: #c07f16;
+  --info: #2d7dd2;
+  --skeleton-a: #e9e9f0;
+  --skeleton-b: #f3f3f8;
+  --shadow: 0 8px 24px rgba(30, 30, 50, 0.12);
+  --topbar-bg: rgba(245, 245, 248, 0.86);
+  --overlay: rgba(255, 255, 255, 0.7);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei', system-ui, -apple-system,
+    'Segoe UI', Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+img {
+  display: block;
+}
+
+button {
+  font-family: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* --- shared primitives --- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  user-select: none;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--card-hover);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.btn.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: transparent;
+}
+
+.btn.small {
+  padding: 4px 10px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chip:hover {
+  color: var(--accent-text);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.skeleton {
+  background: linear-gradient(100deg, var(--skeleton-a) 40%, var(--skeleton-b) 50%, var(--skeleton-a) 60%);
+  background-size: 200% 100%;
+  animation: skeleton-wave 1.4s ease infinite;
+  border-radius: 8px;
+}
+
+@keyframes skeleton-wave {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2.5px solid var(--border);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 16px;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.empty-state .icon {
+  font-size: 40px;
+  opacity: 0.6;
+}
+
+/* page container shared by list pages */
+.page {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+@media (max-width: 768px) {
+  .page {
+    padding: 12px 12px 88px;
+  }
+}

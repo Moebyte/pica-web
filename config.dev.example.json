@@ -1,6 +1,7 @@
 {
   "listen": "127.0.0.1:18081",
   "webDir": "../web",
+  "webDir2": "../webui/dist",
   "dataDir": "./data",
   "secret": "",
   "password": "change-me",
@@ -56,7 +57,9 @@
     "cdnaspa.cc",
     "*.cdnaspa.cc",
     "cdnntr.cc",
-    "*.cdnntr.cc"
+    "*.cdnntr.cc",
+    "jmdanjonproxy.vip",
+    "*.jmdanjonproxy.vip"
   ],
   "allowAll": false,
   "hostOverrides": {},
@@ -69,8 +72,8 @@
   "maxRespMB": 200,
   "timeoutSec": 120,
   "rateLimit": {
-    "rps": 30,
-    "burst": 60
+    "rps": 100,
+    "burst": 300
   },
   "cookieSecure": false,
   "trustProxy": false,

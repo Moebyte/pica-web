@@ -12,22 +12,48 @@ import (
 // handleStatic serves the Flutter Web build with an SPA fallback to
 // index.html. Requests under /api/ never reach this handler.
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
+	s.serveWebApp(w, r, s.cfg.WebDir, "")
+}
+
+// handleV2Static serves the Vue webui build (webDir2) under /v2 with the same
+// SPA fallback and caching rules. The route is always mounted; a missing
+// build simply 404s.
+func (s *Server) handleV2Static(w http.ResponseWriter, r *http.Request) {
+	s.serveWebApp(w, r, s.cfg.WebDir2Resolved(), "/v2")
+}
+
+// serveWebApp is the shared static handler. urlPrefix is "" for the root app
+// and "/v2" for the Vue app; incoming paths are stripped of it before mapping
+// onto root.
+func (s *Server) serveWebApp(w http.ResponseWriter, r *http.Request, webDir, urlPrefix string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "only GET and HEAD are supported")
 		return
 	}
-	root, err := filepath.Abs(s.cfg.WebDir)
+	root, err := filepath.Abs(webDir)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "web_dir_error", err.Error())
 		return
 	}
 	index := filepath.Join(root, "index.html")
 	if info, err := os.Stat(index); err != nil || info.IsDir() {
+		if urlPrefix == "/v2" {
+			http.Error(w, "Vue web build not found (set webDir2 in config.json)", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "Flutter Web build not found (set webDir in config.json)", http.StatusServiceUnavailable)
 		return
 	}
 
-	clean := path.Clean("/" + r.URL.Path)
+	fullPath := r.URL.Path
+	if urlPrefix != "" {
+		if r.URL.Path == urlPrefix {
+			fullPath = "/"
+		} else {
+			fullPath = strings.TrimPrefix(r.URL.Path, urlPrefix)
+		}
+	}
+	clean := path.Clean("/" + fullPath)
 	// Password mode: the app shell requires a session. Static assets stay
 	// public so the login page and its CSS/JS load without a session.
 	if s.cfg.Password != "" && !s.authenticated(r) && (clean == "/" || clean == "/index.html") {

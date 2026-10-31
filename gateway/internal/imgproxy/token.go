@@ -19,11 +19,21 @@ var ErrInvalidToken = errors.New("invalid image token")
 // ErrExpiredToken is returned when a valid token has expired.
 var ErrExpiredToken = errors.New("expired image token")
 
+// JMParams carries the JM (18comic) scramble parameters. When present, the
+// image proxy recombines the vertical block scramble of JPEG responses on a
+// cache miss (non-JPEG payloads are served unchanged with a warning).
+type JMParams struct {
+	EpsID      string `json:"epsId"`
+	ScrambleID string `json:"scrambleId"`
+	BookID     string `json:"bookId"`
+}
+
 // Payload is the signed portion of an image token.
 type Payload struct {
-	URL     string `json:"url"`
-	Profile string `json:"profile,omitempty"`
-	Exp     int64  `json:"exp"`
+	URL     string    `json:"url"`
+	Profile string    `json:"profile,omitempty"`
+	JM      *JMParams `json:"jm,omitempty"`
+	Exp     int64     `json:"exp"`
 }
 
 // Signer signs and verifies image tokens of the form
@@ -39,8 +49,15 @@ func NewSigner(masterSecret string) *Signer {
 
 // Sign issues a token and its expiry.
 func (s *Signer) Sign(rawURL, profile string, ttl time.Duration, now time.Time) (string, time.Time) {
+	return s.SignPayload(Payload{URL: rawURL, Profile: profile}, ttl, now)
+}
+
+// SignPayload issues a token for a fully specified payload (used for tokens
+// carrying extra fields such as the JM scramble parameters).
+func (s *Signer) SignPayload(p Payload, ttl time.Duration, now time.Time) (string, time.Time) {
 	exp := now.Add(ttl)
-	payload, _ := json.Marshal(Payload{URL: rawURL, Profile: profile, Exp: exp.Unix()})
+	p.Exp = exp.Unix()
+	payload, _ := json.Marshal(p)
 	body := base64.RawURLEncoding.EncodeToString(payload)
 	return body + "." + base64.RawURLEncoding.EncodeToString(s.sign([]byte(body))), exp
 }

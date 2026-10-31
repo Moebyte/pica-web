@@ -279,3 +279,44 @@ GatewaySync 扩展为多键：`account` / `history` / `favorites`（均为网关
 任意设备打开 `https://picacg.example.com/`：账号已登录、收藏/历史/图片收藏同步、
 可搜索阅读（hitomi/nhentai/JM）、可把漫画下载到服务器并浏览。数据全在服务端
 （`/var/lib/pica`：vault.db 加密存储 + downloads/ 图片），浏览器只是缓存。
+
+---
+
+## 10. 阶段 2 上线：Vue 3 新前端 `/v2/` + 语义源 API（2026-10-31 深夜）
+
+> 用户拍板：重构目标源收敛为 **禁漫天堂(jm) + PicACG(picacg)** 两个。
+
+### 10.1 语义源 API（网关 `internal/srcapi/`）
+
+- `/api/src/sources|{src}/tabs|{src}/explore|{src}/search|{src}/comic/{id}|{src}/comic/{id}/pages?ep=|{src}/login|logout`
+- **JM 适配器**：加密服务器列表取线路（AES-256-ECB 域表解密，Go 移植）、请求头
+  token/tokenparam/signature（md5 链路）、响应 convertData 解密、promote/latest/search/album/
+  chapter 端点、图片 CDN 从 `/setting` 小时级刷新；免登录浏览
+- **picacg 适配器**：HMAC-SHA256 签名头全量、登录（`auth/sign-in`，凭据 AES 落 vault store
+  `src_picacg_cred`）、token 失效自动重登一次；浏览需登录
+- 封面/正文图一律返回服务端签名 `/api/img/<token>`；**imgproxy 扩展**：token 可带
+  `jm:{epsId,scrambleId,bookId}`，缓存 MISS 时对 JPEG 走 `jmimage.Recombine` 后缓存重排结果
+  （实测注意：JM 现役图源已全量 webp 且未加扰，live 直出；重排路径由合成 jpg 单测字节级保障）
+- `/v2/*` 静态服务 Vue 构建产物（`webDir2`，默认 `<webDir>/../webui/dist`）
+
+### 10.2 Vue 前端（`webui/`，Vite+Vue3+TS+router+pinia，零组件库）
+
+- 页面：探索(tabs+无限滚动)/搜索(sort)/详情(章节+标签+缩略图+继续阅读)/阅读器(连续+单页、
+  键盘触摸、预读、进度节流写历史)/picacg 登录/收藏(只读)/历史(只读)/下载(轮询+浏览)/设置
+- **与 Flutter 版共享同一数据 blob**：历史行 type picacg=0/jm=2/nhentai=5，readEpisode=章节id，
+  读改写 `/api/store/history`；收藏/下载直接消费现有 store/downloads API
+- dev 模式带 mock（`webui/mock/`），每 60s 探测真实 `/api/src/sources` 自动切换
+
+### 10.3 集成验证（生产域名真链路）
+
+- `/v2/` 探索：jm latest 189 卡、82 图解码、封面全为签名直链
+- 详情→阅读器 `/v2/read/jm/1485385`：真实 JM 图片渲染（11/59 懒加载解码）
+- 历史写回：type=2、readEpisode=章节id、max_page=110 ✓
+- picacg 假登录：401 + 前端错误文案 ✓
+- 主站 Flutter 版回归 200；限流调至 100rps/300burst（阅读器并发取图需要）
+
+### 10.4 位置关系
+
+- `https://picacg.example.com/` = Flutter Web（全源，稳定版）
+- `https://picacg.example.com/v2/` = Vue 新 UI（jm+picacg，成长中）
+- 两者共享：账号/收藏/历史/图片缓存/服务端下载

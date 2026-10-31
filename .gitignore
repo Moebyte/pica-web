@@ -16,3 +16,6 @@ data/
 *.db-wal
 .secret
 config.dev.json
+webui/node_modules/
+webui/dist/
+webui/e2e-shots/

@@ -26,6 +26,7 @@ type RateLimit struct {
 type Config struct {
 	Listen        string            `json:"listen"`
 	WebDir        string            `json:"webDir"`
+	WebDir2       string            `json:"webDir2"`
 	DataDir       string            `json:"dataDir"`
 	Secret        string            `json:"secret"`
 	Password      string            `json:"password"`
@@ -115,6 +116,7 @@ func (c *Config) normalize() {
 	if c.WebDir == "" {
 		c.WebDir = "./web"
 	}
+	c.WebDir2 = strings.TrimSpace(c.WebDir2)
 	if c.CacheDir == "" {
 		c.CacheDir = filepath.Join(c.DataDir, "imgcache")
 	}
@@ -194,6 +196,9 @@ func applyEnv(c *Config) error {
 	}
 	if v := os.Getenv("PICA_WEB_DIR"); v != "" {
 		c.WebDir = v
+	}
+	if v := os.Getenv("PICA_WEB_DIR2"); v != "" {
+		c.WebDir2 = v
 	}
 	if v := os.Getenv("PICA_DATA_DIR"); v != "" {
 		c.DataDir = v
@@ -324,4 +329,13 @@ func (c *Config) CacheMaxBytes() int64 { return int64(c.CacheMaxMB) << 20 }
 // ImgTokenTTLDuration returns the signed image URL lifetime.
 func (c *Config) ImgTokenTTLDuration() time.Duration {
 	return time.Duration(c.ImgTokenTTL) * time.Second
+}
+
+// WebDir2Resolved returns the Vue webui root. An empty webDir2 falls back to
+// <webDir>/../webui/dist; a missing directory is fine, /v2 simply 404s then.
+func (c *Config) WebDir2Resolved() string {
+	if c.WebDir2 != "" {
+		return c.WebDir2
+	}
+	return filepath.Join(c.WebDir, "..", "webui", "dist")
 }

@@ -20,6 +20,7 @@ gateway/
 ├── internal/imgproxy/            # 图片 token 签名 + 磁盘缓存
 ├── internal/downloads/           # 服务端下载队列（job.json 持久化、断点续传）
 ├── internal/jmimage/             # JM 竖向分块还原（image/jpeg SubImage 重排）
+├── internal/srcapi/              # 语义源 API（Source 接口 + registry + jm/picacg 实现）
 ├── internal/server/              # 路由、tunnel、图片、下载、认证、静态文件
 ├── config.example.json
 └── README.md
@@ -108,6 +109,13 @@ rsync -a build/web/ ~/pica-web/web/
 ```
 
 任意非 `/api/*` 且不存在的路径回退到 `index.html`；带扩展名的缺失资源返回 404。`/assets/*` 使用一年 immutable 缓存，`index.html` 使用 `no-cache`。
+
+新 Vue 前端（`../webui`，另一仓库）由 `webDir2` 托管在 `/v2/*`：默认取 `<webDir>/../webui/dist`，目录不存在时 `/v2/*` 返回 404（跳过，不影响主站）。SPA 回退与缓存策略与主站一致（`/v2/assets/*` immutable）；可用 `webDir2` / `PICA_WEB_DIR2` 覆盖：
+
+```bash
+cd ~/pica-web/webui && npm run build   # 产物 dist/
+curl -s http://127.0.0.1:18081/v2/         # Vue index.html
+```
 
 ## API 与 curl 示例
 
@@ -323,6 +331,54 @@ curl -s -b /tmp/pica.cookies -H 'Range: bytes=0-1023' \
 
 `num>1` 时把 JPEG 纵向均分 `num` 块（余数归最后一块）逆序重排后以质量 85 重新编码；`num<=1` 原样保存；webp/png 等非 JPEG 不做重排，原样保存并记 warning（`_getSegmentationNum`/`_segmentationPicture` 从 Dart `image_recombine.dart` 移植）。
 
+### 语义源 API（Semantic source API）
+
+`internal/srcapi` 把支持的漫画源聚合成一套语义化端点，服务端完成源站协议（JM 的 token/AES 响应解密、picacg 的 HMAC 签名）与分页/字段归一，前端只消费统一契约。全部 `requireAuth`；`{src}` ∈ `jm | picacg`。
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /api/src/sources` | 源列表：`{key,name,needLogin,loggedIn}` |
+| `GET /api/src/{src}/tabs` | 探索页 tab（jm：home/latest；picacg：recommend/latest） |
+| `GET /api/src/{src}/explore?tab=&page=N` | tab 列表页 → `{comics:[ComicBrief],page,maxPage}` |
+| `GET /api/src/{src}/search?q=&page=N` | 搜索（jm 另支持 `sort=mr/mv/mp/mfm/tp`，默认 mr） |
+| `GET /api/src/{src}/comic/{id}` | 详情 → `{comic:Comic}`（含 chapters/tags 分组） |
+| `GET /api/src/{src}/comic/{id}/pages?ep=<chapterId>` | 章节图片 → `{pages:["/api/img/<token>",...]}` |
+| `POST /api/src/{src}/login` | body `{"username","password"}`；jm 固定 400 `not_supported` |
+| `POST /api/src/{src}/logout` | picacg 清除凭据；jm no-op |
+
+`ComicBrief` = `{id,title,subtitle,author,cover,pageCount,chapters,tags}`；`Comic` 在此之上增加 `favorites`、`uploadDate`（unix 秒）、`tags`（源原生分组：jm 为 作者/作品/登场人物/标签，picacg 为 分类/标签）、`chapters:[{id,title,order}]`、`thumbs`（当前两源均为空数组）。封面/正文图一律返回**服务端签名好的 `/api/img/<token>` 相对 URL**，`<img>` 直接可用，命中 imgproxy 磁盘缓存。
+
+**JM（禁漫天堂）认证说明**：jm v1 API 免登录可浏览，因此 `login` 端点返回 400。请求头（`token=md5(time+"18comicAPPContent")`、`tokenparam="time,2.0.11"` 等）与响应 AES-256-ECB 解密从 Dart `jm_network` 原样移植。API 线路从加密服务器列表（`*.bytepluses.com`）获取：取线路 → 内存缓存 → 全线失败时重取，多线路任选可用者（出厂域名表已整体失效）。图片 CDN 从 `/setting` 的 `img_host` 刷新（每小时一次，默认 `cdn-msp.jmapiproxy3.cc`）。`pages` 端点签发的 token 带 `jm:{epsId,scrambleId,bookId}`，`/api/img/<token>` 缓存 MISS 时对 JPEG 做 `jmimage.Recombine` 分块还原后再缓存返回；webp（JM 目前大部分图源已是 webp）原样返回并记 warning。
+
+**PicACG 认证说明**：必须登录。`login` 用 `{username,password}` 调 `auth/sign-in`（`username` 即哔咔邮箱），成功后把 `{username,password,token,name}` 存入加密 KV（`vault.PutStore(tenant,"src_picacg_cred",...)`），响应 `{"ok":true,"name":"<昵称>"}`；凭据错误返回 401 `{"ok":false,"error":"invalid email or password"}`。token 失效（上游 401）时用存的用户名密码自动重登一次，仍失败则清除 token：`sources` 里 `loggedIn:false`，浏览端点返回 401 `login_required`，前端引导重新登录。
+
+```bash
+# 源列表
+curl -s -b /tmp/pica.cookies http://127.0.0.1:18081/api/src/sources
+# {"ok":true,"sources":[{"key":"jm","name":"禁漫天堂","needLogin":false,"loggedIn":false},
+#                        {"key":"picacg","name":"PicACG","needLogin":true,"loggedIn":false}]}
+
+# JM 最新（免登录）
+curl -s -b /tmp/pica.cookies 'http://127.0.0.1:18081/api/src/jm/explore?tab=latest&page=1'
+
+# JM 详情 → 章节页数（ep = chapters[].id）
+curl -s -b /tmp/pica.cookies http://127.0.0.1:18081/api/src/jm/comic/1487029 | jq '.comic.chapters'
+curl -s -b /tmp/pica.cookies 'http://127.0.0.1:18081/api/src/jm/comic/1487029/pages?ep=1487029' | jq '.pages | length'
+
+# JM 搜索（可选排序 mr/mv/mp/mfm/tp）
+curl -s -b /tmp/pica.cookies 'http://127.0.0.1:18081/api/src/jm/search?q=%E6%9D%B1%E6%96%B9&sort=mr&page=1'
+
+# PicACG 登录 / 登出 / 推荐
+curl -s -b /tmp/pica.cookies -H 'Content-Type: application/json' \
+  -d '{"username":"you@example.com","password":"…"}' http://127.0.0.1:18081/api/src/picacg/login
+curl -s -b /tmp/pica.cookies 'http://127.0.0.1:18081/api/src/picacg/explore?tab=recommend'
+curl -s -b /tmp/pica.cookies -X POST http://127.0.0.1:18081/api/src/picacg/logout
+```
+
+出站全部走 `policy.ValidateURL` + 共享受控 Transport（域名校验照旧，需在 `allowHosts` 放行源站域名，见 `config.example.json`）；上游非 2xx 记 `src upstream status` 日志（4xx Info / 5xx Warn，带 target）。JM 图片 token 使用内置 `jm` header profile（`Referer: https://localhost/` 等，启动时自动注册，可在 config 覆盖）。
+
+新增源只需实现 `srcapi.Source` 接口并在 `NewRegistry` 注册，HTTP 层不用动。
+
 ### Cookie 查看 / 清除
 
 ```bash
@@ -466,13 +522,14 @@ location / {
 
 ## 已知限制
 
-- 阶段 1 仅传输层；没有语义 API、没有 Cloudflare 挑战求解（FlareSolverr 等）。
+- 传输层之外已有语义源 API（`/api/src/*`，仅 jm/picacg）；没有 Cloudflare 挑战求解（FlareSolverr 等）。
 - 服务端下载：单实例内固定 2 并发 job（不可配）；`job.json` 与页面文件同目录，多进程同时写同一 `downloadsDir` 不受支持；JM 还原会对 JPEG 有一次质量 85 的重编码（有轻微代际损失）；JM 的 webp/png 不还原（原样保存）；取消的任务重启后不会自动恢复（已从列表移除）；`file` 接口可读取目录内的任意文件（包括 `job.json`，属预期行为）。
 - 不支持 WebSocket / 101 Upgrade；`Upgrade` 头会被剥离。
 - 请求体在内存中缓冲（≤8 MiB）以支持 307/308 重放；不是流式上传。
 - 上游响应超过 `maxRespMB` 且没有 Content-Length 时，已发出的头部无法撤回，客户端只会收到截断的 body（日志告警）。
 - 原始隧道请求的 `Referer` / `Origin` / `User-Agent` / `Cookie` 不透传（避免浏览器自动带上网关来源）；需要时通过 `X-Pica-Req-Headers` 提供，图片防盗链用 `headerProfiles`。
-- 图片缓存键仅为 `sha256(url)`，同一 URL 不同 profile 共享缓存。
+- 图片缓存键为 `sha256(url)`（同一 URL 不同 profile 共享缓存）；带 `jm` 参数的 token 使用独立键空间（缓存的是重排后的字节）。
+- 语义源 API：jm `/latest` 无总页数，`maxPage` 采用"有内容即 page+1"的启发式；jm/picacg 的 `thumbs` 均为空数组（两源 API 均不提供缩略图，Flutter 端同样没有）；JM 现役图源基本为 webp，重排路径仅对 JPEG 生效（webp 原样返回 + warning）；picacg 凭据以可逆加密存于本机 vault，注意保管 dataDir。
 - 单实例、单租户；SQLite 不适合多进程同时写。
 - 会话是无状态 HMAC cookie，登出只清浏览器 cookie；已签发的 token 在 24h 内理论上仍有效（没有服务端吊销表）。
 - 静态文件未做 gzip/br（交给 nginx）。

@@ -17,10 +17,17 @@ rm -rf "$ROOT/web"
 mkdir -p "$ROOT/web"
 cp -a "$ROOT/app/build/web/." "$ROOT/web/"
 
+echo "==> Vue webui build（阶段2 /v2/ 前端）"
+export PATH=/www/server/nodejs/v24.15.0/bin:$PATH
+cd "$ROOT/webui"
+[ -d node_modules ] || npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+npm run build
+
 echo "==> Go gateway build"
 cd "$ROOT/gateway"
 go build -trimpath -ldflags "-s -w" -o "$ROOT/pica-gateway" ./cmd/pica-gateway
 
+install -d "$ROOT/../pica-web" 2>/dev/null || true
 echo "==> 完成"
 ls -lh "$ROOT/pica-gateway"
-du -sh "$ROOT/web"
+du -sh "$ROOT/web" "$ROOT/webui/dist"

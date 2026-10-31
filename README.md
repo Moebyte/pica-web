@@ -8,6 +8,9 @@
 > （`pica-gateway.service` 常驻）。hitomi 与 nhentai 的探索/详情/阅读/翻页、
 > 收藏、历史、刷新持久化均通过真实浏览器 E2E；构建与单测全绿。
 > 详见 [`docs/STATUS.md`](docs/STATUS.md)。
+>
+> **阶段 2（进行中）**：Vue 3 新前端挂在 **`/v2/`**（jm+picacg 两源，网关语义 API），
+> 与 Flutter 版共享账号/收藏/历史/下载；详见 STATUS §10。
 
 ## 目录
 
@@ -81,6 +84,20 @@ pica-web/
 - 图片缓存为浏览器内存；服务端图片缓存可选用 `/api/img`。
 - 单用户、单实例；多用户/多租户留给阶段 2。
 - Cloudflare 交互式挑战尚未接 FlareSolverr；被挑战时需人工处理或后续补。
+
+## 发布到 GitHub（公开仓库镜像）
+
+工作区在 `publish/repo`（独立 git 仓库，指向 `Moebyte/pica-web`），更新后一键发布：
+
+```bash
+./publish/sync.sh          # 同步 → 自动脱敏 → 泄密扫描门禁 → commit → push
+./publish/sync.sh --dry    # 只看会提交什么，不推送
+```
+
+- 脱敏规则内置于脚本：内网域名/IP/路径/主机名替换、截图目录剔除、README 尾部自动附加
+- **泄密门禁**：扫到内网域名 / 内网 IP / token / 密码管理器名等模式直接中止，不会推送
+- PAT 运行时从本机密码管理器取，不落盘
+- 首次发布：2026-10-31（commit 58350c4）；此后每次运行产生一个 `sync: update <日期>` 提交
 
 ## 上游与许可
 

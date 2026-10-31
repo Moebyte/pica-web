@@ -16,13 +16,16 @@ func TestExampleConfigLoads(t *testing.T) {
 	if cfg.Password != "change-me" {
 		t.Errorf("password = %q", cfg.Password)
 	}
-	if len(cfg.AllowHosts) != 52 {
+	if len(cfg.AllowHosts) != 54 {
 		t.Errorf("allowHosts = %v", cfg.AllowHosts)
+	}
+	if cfg.WebDir2 != "../webui/dist" {
+		t.Errorf("webDir2 = %q", cfg.WebDir2)
 	}
 	if len(cfg.AllowHosts) >= 2 && (cfg.AllowHosts[0] != "nhentai.net" || cfg.AllowHosts[1] != "*.nhentai.net") {
 		t.Errorf("allowHosts order = %v", cfg.AllowHosts[:2])
 	}
-	for _, host := range []string{"e-hentai.org", "*.exhentai.org", "*.ehgt.org", "hitomi.la", "*.picacomic.com", "*.18comic.vip", "*.18comic.org", "*.wnacg.org", "bytepluses.com", "*.jmapiproxy1.cc", "*.jmapiproxy3.cc", "cdnhjk.net", "*.cdnutc.cc", "*.cdngwc.club", "*.cdnutc.me", "cdntwice.org", "*.cdnsha.org", "*.cdnntr.cc", "qy0.ru", "*.gold-usergeneratedcontent.net", "*.hath.network"} {
+	for _, host := range []string{"e-hentai.org", "*.exhentai.org", "*.ehgt.org", "hitomi.la", "*.picacomic.com", "*.18comic.vip", "*.18comic.org", "*.wnacg.org", "bytepluses.com", "*.jmapiproxy1.cc", "*.jmapiproxy3.cc", "cdnhjk.net", "*.cdnutc.cc", "*.cdngwc.club", "*.cdnutc.me", "*.jmdanjonproxy.vip", "cdntwice.org", "*.cdnsha.org", "*.cdnntr.cc", "qy0.ru", "*.gold-usergeneratedcontent.net", "*.hath.network"} {
 		found := false
 		for _, h := range cfg.AllowHosts {
 			if h == host {

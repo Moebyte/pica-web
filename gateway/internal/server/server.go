@@ -16,6 +16,7 @@ import (
 	"picagateway/internal/imgproxy"
 	"picagateway/internal/outbound"
 	"picagateway/internal/ratelimit"
+	"picagateway/internal/srcapi"
 	"picagateway/internal/vault"
 )
 
@@ -56,6 +57,7 @@ type Server struct {
 	transport *http.Transport
 	upstream  http.RoundTripper
 	downloads *downloads.Manager
+	src       *srcapi.Registry
 	handler   http.Handler
 }
 
@@ -93,6 +95,18 @@ func New(o Options) (*Server, error) {
 	}
 	s.downloads = dl
 
+	s.ensureHeaderProfiles()
+	s.src = srcapi.NewRegistry(srcapi.Deps{
+		Policy:    o.Policy,
+		Transport: s.transport, // raw policy transport: sources set their own headers
+		Signer:    o.Signer,
+		TokenTTL:  o.Config.ImgTokenTTLDuration(),
+		Timeout:   o.Config.Timeout(),
+		Tenant:    s.tenant,
+		Store:     o.Vault,
+		Log:       log,
+	})
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
@@ -100,6 +114,14 @@ func New(o Options) (*Server, error) {
 	mux.HandleFunc("GET /api/auth/status", s.handleAuthStatus)
 	mux.HandleFunc("GET /login", s.handleLoginPage)
 
+	mux.Handle("GET /api/src/sources", s.requireAuth(http.HandlerFunc(s.handleSrcSources)))
+	mux.Handle("GET /api/src/{src}/tabs", s.requireAuth(http.HandlerFunc(s.handleSrcTabs)))
+	mux.Handle("GET /api/src/{src}/explore", s.requireAuth(http.HandlerFunc(s.handleSrcExplore)))
+	mux.Handle("GET /api/src/{src}/search", s.requireAuth(http.HandlerFunc(s.handleSrcSearch)))
+	mux.Handle("GET /api/src/{src}/comic/{id}", s.requireAuth(http.HandlerFunc(s.handleSrcComic)))
+	mux.Handle("GET /api/src/{src}/comic/{id}/pages", s.requireAuth(http.HandlerFunc(s.handleSrcPages)))
+	mux.Handle("POST /api/src/{src}/login", s.requireAuth(http.HandlerFunc(s.handleSrcLogin)))
+	mux.Handle("POST /api/src/{src}/logout", s.requireAuth(http.HandlerFunc(s.handleSrcLogout)))
 	mux.Handle("POST /api/tunnel", s.requireAuth(http.HandlerFunc(s.handleTunnel)))
 	mux.Handle("GET /api/img/sign", s.requireAuth(http.HandlerFunc(s.handleImageSign)))
 	mux.Handle("GET /api/img/{token}", s.requireAuth(http.HandlerFunc(s.handleImage)))
@@ -114,10 +136,33 @@ func New(o Options) (*Server, error) {
 	mux.Handle("GET /api/downloads/file", s.requireAuth(http.HandlerFunc(s.handleDownloadsFile)))
 	mux.Handle("GET /api/downloads/healthz", s.requireAuth(http.HandlerFunc(s.handleDownloadsHealth)))
 	mux.HandleFunc("/api/", s.handleAPINotFound)
+	mux.HandleFunc("GET /v2", s.handleV2Static)
+	mux.HandleFunc("GET /v2/", s.handleV2Static)
 	mux.HandleFunc("/", s.handleStatic)
 
 	s.handler = s.withAccessLog(s.withRecover(s.withSecurityHeaders(s.withRateLimit(mux))))
 	return s, nil
+}
+
+// ensureHeaderProfiles registers the built-in image header profiles used by
+// the semantic source API unless the operator overrides them.
+func (s *Server) ensureHeaderProfiles() {
+	if s.cfg.HeaderProfiles == nil {
+		s.cfg.HeaderProfiles = map[string]map[string]string{}
+	}
+	if _, ok := s.cfg.HeaderProfiles["jm"]; !ok {
+		s.cfg.HeaderProfiles["jm"] = map[string]string{
+			"Accept":                   "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+			"Accept-Language":          "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+			"Referer":                  "https://localhost/",
+			"Sec-Fetch-Dest":           "image",
+			"Sec-Fetch-Mode":           "no-cors",
+			"Sec-Fetch-Site":           "cross-site",
+			"Sec-Fetch-Storage-Access": "active",
+			"User-Agent":               srcapi.JMUserAgent,
+			"X-Requested-With":         "com.example.app",
+		}
+	}
 }
 
 // Handler returns the root HTTP handler.
