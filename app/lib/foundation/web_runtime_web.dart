@@ -180,6 +180,16 @@ void _installFullscreenListener() {
 
 /// Coarse mobile browser detection: Android/iOS user agent or a touch-first
 /// pointer. Used to auto-enter fullscreen only on phones.
+/// 解除浏览器屏幕方向锁定。Web 端阅读器一律不锁方向：部分手机浏览器
+/// 在进入全屏后才会让方向锁生效，会把竖屏阅读直接转成横屏。
+void unlockScreenOrientation() {
+  try {
+    web.window.screen.orientation.unlock();
+  } catch (e) {
+    LogManager.addLog(LogLevel.info, "WebRuntime", "orientation unlock failed: $e");
+  }
+}
+
 bool get isMobileBrowser {
   try {
     final ua = web.window.navigator.userAgent;

@@ -13,6 +13,8 @@ Future<void> exitFullscreen() async {}
 
 bool get isMobileBrowser => false;
 
+void unlockScreenOrientation() {}
+
 void addPageLifecycleListener(void Function(bool hidden) listener) {}
 
 void removePageLifecycleListener(void Function(bool hidden) listener) {}

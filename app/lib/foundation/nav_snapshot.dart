@@ -46,6 +46,8 @@ class NavSnapshot {
   static List<Map<String, dynamic>> _restorePlan = [];
   static Timer? _saveTimer;
   static bool _replaying = false;
+  /// 重放期间固定的导航器（保证详情/阅读器在同一栈上）。
+  static NavigatorState? _replayNav;
   static bool _lifecycleInstalled = false;
 
   static bool get enabled => _enabled;
@@ -256,6 +258,17 @@ class NavSnapshot {
       final ordered = List<Map<String, dynamic>>.from(plan);
       ordered.sort((a, b) => _priority(a).compareTo(_priority(b)));
 
+      // 固定用同一个导航器重放整个栈。MainPage 在 initState 里注册嵌套
+      // 导航器；若重放开始得太早，会一部分路由落到根导航器、一部分落到
+      // 嵌套导航器，浏览器返回就会跳过详情页。这里最多等 2 秒让嵌套
+      // 导航器就绪，并全程复用它。
+      _replayNav = App.mainNavigatorKey?.currentState;
+      for (var i = 0; i < 20 && _replayNav == null; i++) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        _replayNav = App.mainNavigatorKey?.currentState;
+      }
+      _replayNav ??= App.navigatorKey.currentState;
+
       var pushedComic = false;
       for (final entry in ordered) {
         try {
@@ -286,9 +299,11 @@ class NavSnapshot {
                   )));
               break;
             case "reader":
-              final restored = await _restoreReader(entry);
-              if (!restored && !pushedComic) {
-                // Degrade to the detail page when the reader cannot rebuild.
+              // 不重建阅读器路由：被压在下面的详情页没有初始化，返回时会
+              // 报控制器不存在。改为落到详情页——阅读进度已由 pagehide 时
+              // 写入的历史行承载，详情页的"继续阅读"会带用户回到原页码。
+              if (!pushedComic) {
+                pushedComic = true;
                 _pushIntoMain(_instantRoute(() => ComicPage(
                       sourceKey: entry["source"] as String,
                       id: entry["id"] as String,
@@ -296,8 +311,14 @@ class NavSnapshot {
               }
               break;
           }
-          // Let the new route settle before pushing the next one.
-          await Future.delayed(const Duration(milliseconds: 30));
+          // 等两帧：push 之后页面（尤其被压在阅读器下面的详情页）要把
+          // 自己注册进快照栈，浏览器返回才能落到正确的上一页。
+          try {
+            await WidgetsBinding.instance.endOfFrame;
+            await Future.delayed(const Duration(milliseconds: 80));
+            await WidgetsBinding.instance.endOfFrame;
+          } catch (_) {}
+          await Future.delayed(const Duration(milliseconds: 40));
         } catch (e, s) {
           LogManager.addLog(LogLevel.error, "NavSnapshot",
               "replay ${entry["kind"]} failed: $e\n$s");
@@ -307,7 +328,34 @@ class NavSnapshot {
           LogLevel.info, "NavSnapshot", "replayed ${ordered.length} entries");
     } finally {
       _replaying = false;
+      _replayNav = null;
+      _dedupeStack();
       flush();
+    }
+  }
+
+  /// Replay pushes some routes before/after their pages register themselves,
+  /// which can leave duplicate entries (e.g. two comic pages) in the stack.
+
+  static void _dedupeStack() {
+    final seen = <String>{};
+    _stack.retainWhere((e) => seen.add(_entryKey(e.data)));
+  }
+
+  static String _entryKey(Map<String, dynamic> d) {
+    switch (d["kind"]) {
+      case "main":
+        return "main";
+      case "comic":
+        return "comic:${d["source"]}:${d["id"]}";
+      case "reader":
+        return "reader:${d["source"]}:${d["id"]}";
+      case "search":
+        return "search:${d["source"]}:${d["query"]}";
+      case "page":
+        return "page:${d["name"]}";
+      default:
+        return d.toString();
     }
   }
 
@@ -341,12 +389,10 @@ class NavSnapshot {
   }
 
   static void _pushIntoMain(Route<void> route) {
-    final nested = App.mainNavigatorKey?.currentState;
-    if (nested != null) {
-      nested.push(route);
-    } else {
-      App.navigatorKey.currentState?.push(route);
-    }
+    final nav = _replayNav ??
+        App.mainNavigatorKey?.currentState ??
+        App.navigatorKey.currentState;
+    nav?.push(route);
   }
 
   static PageRoute<void> _instantRoute(Widget Function() builder) {
@@ -361,6 +407,8 @@ class NavSnapshot {
 
   /// Rebuilds the reader for [entry]. Returns false when the source data
   /// cannot be loaded (the caller then falls back to the detail page).
+  // 保留：待详情页后台初始化问题解决后可恢复"直接重建阅读器路由"。
+  // ignore: unused_element
   static Future<bool> _restoreReader(Map<String, dynamic> entry) async {
     final sourceKey = entry["source"] as String?;
     final id = entry["id"] as String?;
@@ -438,9 +486,9 @@ class NavSnapshot {
           );
           break;
       }
-      final navigator = App.navigatorKey.currentState;
-      if (navigator == null) return false;
-      navigator.push(_instantRoute(() => reader!));
+      // 阅读器必须和详情页放在同一个导航器里：浏览器返回会先弹根导航器，
+      // 若阅读器在根上会把主界面直接露出来，跳过详情页。
+      _pushIntoMain(_instantRoute(() => reader!));
       return true;
     } catch (e, s) {
       LogManager.addLog(

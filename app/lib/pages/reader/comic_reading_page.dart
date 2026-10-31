@@ -276,25 +276,26 @@ class ComicReadingPage extends StatelessWidget {
         return false;
       };
       HardwareKeyboard.instance.addHandler(_nav.keyHandler!);
-      if (App.isWeb && isMobileBrowser) {
-        // Tapping a comic and entering the reader is a user activation, so the
-        // browser usually grants fullscreen here. Failure is silent; the
-        // toolbar / settings provide a manual toggle.
-        enterFullscreen();
+      if (App.isWeb) {
+        // 不再自动全屏：部分手机浏览器进入全屏后会触发方向锁定/旋转，
+        // 阅读体验反而更差。全屏改为顶栏/设置里的手动开关。
+        unlockScreenOrientation();
       }
       if (appdata.settings[14] == "1") {
         setKeepScreenOn();
       }
-      if (appdata.settings[76] == "1") {
-        SystemChrome.setPreferredOrientations([
-          DeviceOrientation.landscapeLeft,
-          DeviceOrientation.landscapeRight
-        ]);
-      } else if (appdata.settings[76] == "2") {
-        SystemChrome.setPreferredOrientations([
-          DeviceOrientation.portraitUp,
-          DeviceOrientation.portraitDown
-        ]);
+      if (!App.isWeb) {
+        if (appdata.settings[76] == "1") {
+          SystemChrome.setPreferredOrientations([
+            DeviceOrientation.landscapeLeft,
+            DeviceOrientation.landscapeRight
+          ]);
+        } else if (appdata.settings[76] == "2") {
+          SystemChrome.setPreferredOrientations([
+            DeviceOrientation.portraitUp,
+            DeviceOrientation.portraitDown
+          ]);
+        }
       }
       //进入阅读器时清除内存中的缓存, 并且增大限制
       BaseImageProvider.clearCache();
@@ -311,7 +312,9 @@ class ComicReadingPage extends StatelessWidget {
       BaseImageProvider.setCacheSizeLimit(50 * 1024 * 1024);
       logic.clearPhotoViewControllers();
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-      SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+      if (!App.isWeb) {
+        SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+      }
       if (logic.listenVolume != null) {
         logic.listenVolume!.stop();
       }
@@ -340,7 +343,7 @@ class ComicReadingPage extends StatelessWidget {
           BaseComicPage.tagsStack.last.updateHistory(history);
         }
       });
-      if (appdata.settings[76] != "0") {
+      if (!App.isWeb && appdata.settings[76] != "0") {
         SystemChrome.setPreferredOrientations(DeviceOrientation.values);
       }
       if (useDarkBackground) {

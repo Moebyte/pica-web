@@ -69,6 +69,9 @@ extension ToolBar on ComicReadingPage {
                         child: IconButton(
                           icon: const Icon(Icons.fullscreen),
                           onPressed: () {
+                            if (App.isWeb && isMobileBrowser) {
+                              unlockScreenOrientation();
+                            }
                             logic.fullscreen();
                           },
                         ),
