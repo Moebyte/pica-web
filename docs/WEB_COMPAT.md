@@ -216,9 +216,9 @@ Flutter：3.47.9 / Dart 3.13.7（`flutter`）
 
 ```bash
 cd ~/pica-web/app
-flutter pub get
-flutter test test/web_compat/tunnel_protocol_test.dart
-flutter build web --release
+/opt/flutter pub get
+/opt/flutter test test/web_compat/tunnel_protocol_test.dart
+/opt/flutter build web --release
 
 # 部署（与网关同源）
 # rsync -a build/web/ /path/to/gateway/web/

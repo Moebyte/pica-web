@@ -91,7 +91,7 @@ hitomi 与 nhentai 的探索、详情、阅读、翻页均通过真实端到端�
 
 ---
 
-## 4. 部署（示例值）
+## 4. 部署
 
 > **已上线（2026-10-31）**：`https://picacg.example.com/` 已在 你的服务器可用。
 > 域名走 Cloudflare DNS-only A 记录，LE 证书自动续期，网关以 `pica-gateway.service`

@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-FLUTTER_BIN="${FLUTTER_BIN:-flutter}"
+FLUTTER_BIN="${FLUTTER_BIN:-/opt/flutter}"
 
 echo "==> Flutter Web release build"
 cd "$ROOT/app"
