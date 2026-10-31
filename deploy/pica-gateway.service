@@ -1,0 +1,28 @@
+[Unit]
+Description=PicaComic B/S gateway
+Documentation=file:///opt/pica/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pica
+Group=pica
+WorkingDirectory=/opt/pica
+ExecStart=/opt/pica/pica-gateway -config /opt/pica/config.json
+Restart=on-failure
+RestartSec=3
+
+# 收紧权限：只读写数据目录，程序与静态站点只读
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/pica
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

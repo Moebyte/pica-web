@@ -1,0 +1,18 @@
+# Flutter
+app/build/
+app/.dart_tool/
+app/.flutter-plugins*
+app/android/.gradle/
+
+# Go
+gateway/pica-gateway
+gateway/data/
+
+# 运行时产物（部署时生成，不入库）
+web/
+data/
+*.db
+*.db-shm
+*.db-wal
+.secret
+config.dev.json
