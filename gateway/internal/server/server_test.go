@@ -37,6 +37,13 @@ type testEnv struct {
 
 func newTestEnv(t *testing.T, mutate func(*config.Config)) *testEnv {
 	t.Helper()
+	return newTestEnvWith(t, mutate, nil)
+}
+
+// newTestEnvWith builds a test environment and lets the caller adjust the
+// server Options (e.g. inject a srcapi.Registry).
+func newTestEnvWith(t *testing.T, mutate func(*config.Config), mutateOpts func(*Options)) *testEnv {
+	t.Helper()
 
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()
@@ -75,7 +82,7 @@ func newTestEnv(t *testing.T, mutate func(*config.Config)) *testEnv {
 	policy := outbound.New(cfg.AllowHosts, cfg.AllowAll, cfg.HostOverrides, nil)
 	policy.AllowLoopback = true // httptest upstreams listen on 127.0.0.1
 
-	srv, err := New(Options{
+	opts := Options{
 		Config:   &cfg,
 		Vault:    v,
 		Policy:   policy,
@@ -88,7 +95,11 @@ func newTestEnv(t *testing.T, mutate func(*config.Config)) *testEnv {
 		// Keep download retry tests fast; production uses 2s/8s/30s.
 		DownloadRetryDelays: []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond},
 		DownloadPageTimeout: 5 * time.Second,
-	})
+	}
+	if mutateOpts != nil {
+		mutateOpts(&opts)
+	}
+	srv, err := New(opts)
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}

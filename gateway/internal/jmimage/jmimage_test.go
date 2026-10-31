@@ -2,6 +2,7 @@ package jmimage
 
 import (
 	"bytes"
+	"encoding/base64"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -232,6 +233,59 @@ func TestRecombineNumExceedsHeight(t *testing.T) {
 func TestRecombineInvalidJPEG(t *testing.T) {
 	if _, err := Recombine([]byte("not a jpeg"), 10); err == nil {
 		t.Fatal("expected decode error")
+	}
+}
+
+// TestRecombineWebP covers the live JM format: a lossless 8x24 WebP holding
+// 12 solid gray stripes in scrambled (reverse) order. Recombine must restore
+// the original stripe order and return JPEG.
+func TestRecombineWebP(t *testing.T) {
+	const scrambledWebP = "UklGRkYAAABXRUJQVlA4TDoAAAAvB8AFAF8gFkwkdudPGsMpPE7hMf/Z4YCQtp1MYQpTmEIKKaSQQgoppBDfdYjof34el8NmMRk0RRIA"
+	raw, err := base64.StdEncoding.DecodeString(scrambledWebP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !IsWebPBytes(raw) {
+		t.Fatal("fixture is not webp")
+	}
+	out, err := Recombine(raw, 12)
+	if err != nil {
+		t.Fatalf("Recombine webp: %v", err)
+	}
+	if !IsJPEGBytes(out) {
+		t.Fatal("output is not jpeg")
+	}
+	got, err := jpeg.Decode(bytes.NewReader(out))
+	if err != nil {
+		t.Fatalf("decode output: %v", err)
+	}
+	if got.Bounds().Dx() != 8 || got.Bounds().Dy() != 24 {
+		t.Fatalf("bounds = %v", got.Bounds())
+	}
+	for i := 0; i < 12; i++ {
+		want := 30 + i*20
+		r, _, _, _ := got.At(4, i*2+1).RGBA()
+		if diff := abs(int(r>>8) - want); diff > 6 {
+			t.Fatalf("stripe %d = %d, want %d", i, r>>8, want)
+		}
+	}
+}
+
+func TestRecombineUnsupportedFormat(t *testing.T) {
+	if _, err := Recombine([]byte("GIF89a not supported"), 4); err == nil {
+		t.Fatal("expected unsupported format error")
+	}
+}
+
+func TestImageFormatSniffing(t *testing.T) {
+	if !IsWebP("webp", "") || !IsWebP("", "image/webp") || IsWebP("jpg", "image/jpeg") {
+		t.Fatal("IsWebP")
+	}
+	if !IsJPEGBytes([]byte{0xff, 0xd8, 0xff, 0xe0}) || IsJPEGBytes([]byte{0xff, 0xd8}) {
+		t.Fatal("IsJPEGBytes")
+	}
+	if !IsWebPBytes([]byte("RIFF....WEBPVP8 ")) || IsWebPBytes([]byte("RIFF....AXWV")) {
+		t.Fatal("IsWebPBytes")
 	}
 }
 

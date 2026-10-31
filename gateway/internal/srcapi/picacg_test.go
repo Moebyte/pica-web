@@ -451,6 +451,59 @@ func TestPicacgLoginAndBrowse(t *testing.T) {
 	}
 }
 
+func TestPicacgDownloadPages(t *testing.T) {
+	s, _ := newTestPicacg(t)
+	ctx := context.Background()
+
+	// Credentials are still required.
+	if _, err := s.DownloadPages(ctx, "L1", "1"); err == nil {
+		t.Fatal("DownloadPages without login succeeded")
+	} else if se, ok := err.(*StatusError); !ok || se.Status != http.StatusUnauthorized || se.Code != CodeLoginRequired {
+		t.Fatalf("DownloadPages error = %v", err)
+	}
+
+	if _, err := s.Login(ctx, "user@example.com", "correct"); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	pages, err := s.DownloadPages(ctx, "L1", "1")
+	if err != nil {
+		t.Fatalf("DownloadPages: %v", err)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("pages = %+v", pages)
+	}
+	wantURLs := []string{
+		"https://static001.picacomic.com/static/p/1.jpg",
+		"https://static001.picacomic.com/static/p/2.jpg",
+	}
+	for i, p := range pages {
+		if p.URL != wantURLs[i] {
+			t.Fatalf("page %d url = %q, want %q", i, p.URL, wantURLs[i])
+		}
+		if p.JM != nil {
+			t.Fatalf("page %d has jm params: %+v", i, p.JM)
+		}
+		if len(p.Headers) != 0 {
+			t.Fatalf("page %d headers = %+v", i, p.Headers)
+		}
+	}
+
+	// Empty ep falls back to chapter order 1; invalid ep is a 400.
+	fallback, err := s.DownloadPages(ctx, "L1", "")
+	if err != nil {
+		t.Fatalf("DownloadPages fallback: %v", err)
+	}
+	if len(fallback) != 2 {
+		t.Fatalf("fallback pages = %+v", fallback)
+	}
+	if _, err := s.DownloadPages(ctx, "L1", "not-a-number"); err == nil {
+		t.Fatal("invalid ep accepted")
+	} else if se, ok := err.(*StatusError); !ok || se.Status != http.StatusBadRequest || se.Code != "invalid_ep" {
+		t.Fatalf("invalid ep error = %v", err)
+	}
+}
+
 func TestPicacgAutoRelogin(t *testing.T) {
 	s, f := newTestPicacg(t)
 	ctx := context.Background()

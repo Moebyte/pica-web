@@ -320,3 +320,35 @@ GatewaySync 扩展为多键：`account` / `history` / `favorites`（均为网关
 - `https://picacg.example.com/` = Flutter Web（全源，稳定版）
 - `https://picacg.example.com/v2/` = Vue 新 UI（jm+picacg，成长中）
 - 两者共享：账号/收藏/历史/图片缓存/服务端下载
+
+---
+
+## 11. 2026-11-01：方向校正 + 性能优化 + Bug 清扫
+
+### 11.1 方向校正
+
+用户明确：**初衷是在 Flutter 版基础上增加功能、修 bug、优化响应**，不是换前端。
+- **Flutter Web（`/`）为唯一主线**；`/v2/`（Vue）**冻结**，保留可用的轻量入口但不再投入。
+- 后续所有功能/优化都落在 Flutter 版；两版共享的服务端数据（账号/收藏/历史/下载）不受影响。
+
+### 11.2 首屏与图片链路（响应优化）
+
+| 项 | 前 | 后 |
+|---|---|---|
+| CanvasKit wasm 传输 | 7.28 MB 裸传 | **3.17 MB**（nginx gzip_types 加 application/wasm） |
+| sqlite3.wasm | 686 KB | **353 KB** |
+| 图片请求 | 每张 POST /api/tunnel，**刷新全部重下**、浏览器不可缓存 | **POST /api/img/sign → GET /api/img/<token>**：浏览器 HTTP 缓存 + 服务端 imgproxy 磁盘缓存（确定性 token，24h 窗口） |
+| 同一漫画二次打开 | 3.58 MB / 36 张全量重传 | **138 KB / 12 张，节省 96%**（Playwright 实测） |
+| hitomi 探索首屏 | 15-30s（等 100 个 galleryblock 全完） | **1.8-2.7s**（分批渐进渲染+单条容错） |
+
+### 11.3 关键修复
+
+- **JM WebP 是加扰的**（实测推翻此前假设）：网关 `/api/img` 与服务端下载现在对 WebP 也做分块重排（`golang.org/x/image/webp` 解码 → 重排 → JPEG 输出）；Flutter 端不再客户端重排（旧网关回退路径保留）。`/v2` 阅读页同步修复为正确图像。
+- 签名 token：payload 支持 headers（过滤 Cookie/X-*/hop-by-hop）、exp 窗口对齐（浏览器缓存可命中）、`Cache-Control: private`、缓存键含 headers+profile 指纹。
+- 8 个 Flutter Web bug：onboarding 双击并发、搜索页源码为空的空白、picacg 未登录引导、空状态、me_page 计数器、setState-after-dispose、三源重登录未 await 等（详见 `docs/BUGFIX-20261101.md`）。
+- 配置：JM 新图床 `*.jmdanjonproxy.xyz` 加入白名单（56 条）；限流 100rps/300burst。
+
+### 11.4 已知噪音（暂不处理）
+
+- `Refused to set unsafe header "user-agent"`：列表封面 `Image.network` 带头导致，浏览器拒绝但图片仍正常。
+- 源站 5xx / JM 死线路探测的 4xx：上游行为，非前端异常。

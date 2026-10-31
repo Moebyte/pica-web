@@ -1,16 +1,31 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onActivated, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { getFavorites, srcFromType, type FavoriteItem } from '@/api/store'
+import {
+  createFolder,
+  deleteFolder,
+  favoriteTimeMs,
+  getFavorites,
+  removeFavorite,
+  sortedFolderNames,
+  srcFromType,
+  type FavoriteItem,
+  type FavoritesBlob,
+} from '@/api/store'
+import { errMessage } from '@/api/http'
+import { useToast } from '@/composables/useToast'
 import SignedImg from '@/components/SignedImg.vue'
 import ErrorRetry from '@/components/ErrorRetry.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import ModalDialog from '@/components/ModalDialog.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import { useScrollRestore } from '@/composables/useScrollRestore'
 import { relativeTime } from '@/utils/format'
 
 defineOptions({ name: 'FavoritesPage' })
 
 const router = useRouter()
+const toast = useToast()
 
 interface Folder {
   name: string
@@ -23,21 +38,33 @@ const folders = ref<Folder[]>([])
 
 const totalCount = computed(() => folders.value.reduce((n, f) => n + f.items.length, 0))
 
+// new-folder dialog
+const createOpen = ref(false)
+const newFolderName = ref('')
+const createError = ref('')
+const creating = ref(false)
+
+// folder delete confirmation
+const folderTarget = ref<Folder | null>(null)
+const deletingFolder = ref(false)
+
+// per-row delete in flight
+const itemBusy = ref('')
+
+function applyBlob(blob: FavoritesBlob): void {
+  folders.value = sortedFolderNames(blob).map((name) => ({
+    name,
+    items: blob.data.folders[name] ?? [],
+  }))
+}
+
 async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    const blob = await getFavorites()
-    const order = new Map(
-      blob.data.folderOrder.map((f) => [f.folder_name, f.order_value] as const),
-    )
-    const names = Object.keys(blob.data.folders)
-    names.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
-    folders.value = names
-      .filter((n) => (blob.data.folders[n] ?? []).length > 0)
-      .map((n) => ({ name: n, items: blob.data.folders[n] ?? [] }))
+    applyBlob(await getFavorites())
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = errMessage(e)
   } finally {
     loading.value = false
   }
@@ -49,7 +76,75 @@ function open(item: FavoriteItem): void {
   void router.push({ name: 'comic', params: { src, id: item.target } })
 }
 
-onMounted(() => void load())
+function timeLabel(item: FavoriteItem): string {
+  const ms = favoriteTimeMs(item.time)
+  return ms > 0 ? relativeTime(ms) : '—'
+}
+
+function openCreate(): void {
+  newFolderName.value = ''
+  createError.value = ''
+  createOpen.value = true
+}
+
+async function confirmCreate(): Promise<void> {
+  const name = newFolderName.value.trim()
+  if (!name) {
+    createError.value = '请输入文件夹名'
+    return
+  }
+  if (folders.value.some((f) => f.name === name)) {
+    createError.value = '该文件夹已存在'
+    return
+  }
+  creating.value = true
+  createError.value = ''
+  try {
+    applyBlob(await createFolder(name))
+    createOpen.value = false
+    toast.success(`已新建文件夹「${name}」`)
+  } catch (e) {
+    createError.value = `新建失败：${errMessage(e)}`
+  } finally {
+    creating.value = false
+  }
+}
+
+async function deleteItem(item: FavoriteItem): Promise<void> {
+  if (itemBusy.value) return
+  itemBusy.value = item.target
+  try {
+    applyBlob(await removeFavorite(item.target))
+    toast.success('已取消收藏')
+  } catch (e) {
+    toast.error(`删除失败：${errMessage(e)}`)
+  } finally {
+    itemBusy.value = ''
+  }
+}
+
+function askDeleteFolder(folder: Folder): void {
+  folderTarget.value = folder
+}
+
+async function confirmDeleteFolder(): Promise<void> {
+  const target = folderTarget.value
+  if (!target || deletingFolder.value) return
+  deletingFolder.value = true
+  try {
+    applyBlob(await deleteFolder(target.name))
+    folderTarget.value = null
+    toast.success(`已删除文件夹「${target.name}」`)
+  } catch (e) {
+    toast.error(`删除文件夹失败：${errMessage(e)}`)
+  } finally {
+    deletingFolder.value = false
+  }
+}
+
+// KeepAlive: refresh every time the page is (re)entered so rows added from
+// the detail page or the Flutter app show up immediately.
+onActivated(() => void load())
 useScrollRestore()
 </script>
 
@@ -69,55 +164,172 @@ useScrollRestore()
       </div>
     </div>
 
-    <EmptyState
-      v-else-if="folders.length === 0"
-      icon="💛"
-      text="还没有收藏（v1 为只读展示，请在 App 端添加收藏）"
-    />
-
     <template v-else>
-      <div class="fav-summary">共 {{ folders.length }} 个文件夹 · {{ totalCount }} 个收藏</div>
-      <section v-for="folder in folders" :key="folder.name" class="folder">
-        <h2>
-          {{ folder.name }}
-          <span class="count">({{ folder.items.length }})</span>
-        </h2>
-        <div class="fav-grid">
-          <button v-for="item in folder.items" :key="item.target" class="fav-card" @click="open(item)">
-            <div class="cover">
-              <SignedImg :url="item.cover_path" :alt="item.name" />
-            </div>
-            <div class="name" :title="item.name">{{ item.name }}</div>
-            <div class="meta">
-              <span class="author">{{ item.author || '—' }}</span>
-              <span class="time">{{ relativeTime(item.time) }}</span>
-            </div>
+      <div class="fav-toolbar">
+        <div class="fav-summary" data-testid="fav-summary">
+          共 {{ folders.length }} 个文件夹 · {{ totalCount }} 个收藏
+        </div>
+        <button class="btn small" data-testid="new-folder" @click="openCreate">新建文件夹</button>
+      </div>
+
+      <EmptyState
+        v-if="folders.length === 0"
+        icon="💛"
+        text="还没有收藏，去漫画详情页点「收藏」吧"
+      >
+        <template #action>
+          <button class="btn small" @click="openCreate">新建文件夹</button>
+        </template>
+      </EmptyState>
+
+      <template v-else>
+        <section
+          v-for="folder in folders"
+          :key="folder.name"
+          class="folder"
+          :data-folder="folder.name"
+        >
+        <div class="folder-head">
+          <h2>
+            {{ folder.name }}
+            <span class="count">({{ folder.items.length }})</span>
+          </h2>
+          <button
+            class="btn small danger folder-del"
+            data-testid="delete-folder"
+            @click="askDeleteFolder(folder)"
+          >
+            删除文件夹
           </button>
         </div>
-      </section>
+
+        <p v-if="folder.items.length === 0" class="folder-empty">空文件夹</p>
+
+        <div v-else class="fav-grid">
+          <div v-for="item in folder.items" :key="item.target" class="fav-card-wrap">
+            <button class="fav-card" @click="open(item)">
+              <div class="cover">
+                <SignedImg :url="item.cover_path" :alt="item.name" />
+              </div>
+              <div class="name" :title="item.name">{{ item.name }}</div>
+              <div class="meta">
+                <span class="author">{{ item.author || '—' }}</span>
+                <span class="time">{{ timeLabel(item) }}</span>
+              </div>
+            </button>
+            <button
+              class="del-item"
+              :disabled="itemBusy === item.target"
+              aria-label="删除收藏"
+              data-testid="fav-delete"
+              @click.stop="deleteItem(item)"
+            >
+              <span v-if="itemBusy === item.target" class="spinner tiny" />
+              <template v-else>×</template>
+            </button>
+          </div>
+        </div>
+        </section>
+      </template>
     </template>
+
+    <ModalDialog
+      :open="createOpen"
+      title="新建文件夹"
+      :busy="creating"
+      width="380px"
+      @close="createOpen = false"
+    >
+      <label class="new-folder">
+        <span>文件夹名</span>
+        <input
+          v-model="newFolderName"
+          type="text"
+          maxlength="64"
+          placeholder="例如：我的收藏"
+          data-testid="new-folder-input"
+          @input="createError = ''"
+          @keyup.enter="confirmCreate"
+        />
+      </label>
+      <p v-if="createError" class="dialog-error" data-testid="new-folder-error">{{ createError }}</p>
+      <template #footer>
+        <button class="btn" :disabled="creating" @click="createOpen = false">取消</button>
+        <button class="btn primary" :disabled="creating" data-testid="new-folder-confirm" @click="confirmCreate">
+          <span v-if="creating" class="spinner tiny" />
+          新建
+        </button>
+      </template>
+    </ModalDialog>
+
+    <ConfirmDialog
+      :open="!!folderTarget"
+      title="删除文件夹？"
+      :message="
+        folderTarget
+          ? `将删除文件夹「${folderTarget.name}」及其中 ${folderTarget.items.length} 个收藏`
+          : ''
+      "
+      confirm-text="删除"
+      danger
+      :busy="deletingFolder"
+      @cancel="folderTarget = null"
+      @confirm="confirmDeleteFolder"
+    />
   </div>
 </template>
 
 <style scoped>
+.fav-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
 .fav-summary {
   color: var(--text-faint);
   font-size: 13px;
-  margin-bottom: 16px;
 }
 
 .folder {
   margin-bottom: 30px;
 }
 
+.folder-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
 h2 {
+  flex: 1;
+  min-width: 0;
   font-size: 15.5px;
-  margin: 0 0 12px;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .count {
   color: var(--text-faint);
   font-weight: 400;
+  font-size: 13px;
+}
+
+.folder-del {
+  flex: none;
+}
+
+.folder-empty {
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--text-faint);
   font-size: 13px;
 }
 
@@ -134,8 +346,14 @@ h2 {
   }
 }
 
+.fav-card-wrap {
+  position: relative;
+  min-width: 0;
+}
+
 .fav-card {
   display: block;
+  width: 100%;
   text-align: left;
   background: transparent;
   border: none;
@@ -175,6 +393,71 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.del-item {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(12, 12, 16, 0.66);
+  color: #fff;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  opacity: 0.82;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.del-item:hover:not(:disabled) {
+  opacity: 1;
+  background: var(--danger);
+}
+
+.del-item:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.spinner.tiny {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+}
+
+.new-folder span {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.new-folder input {
+  width: 100%;
+  padding: 9px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+}
+
+.new-folder input:focus {
+  border-color: var(--accent);
+}
+
+.dialog-error {
+  color: var(--danger);
+  font-size: 13px;
+  margin: 10px 0 0;
 }
 
 .sk-cover {

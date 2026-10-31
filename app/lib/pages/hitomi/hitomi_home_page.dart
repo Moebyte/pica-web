@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:pica_comic/foundation/log.dart';
 import 'package:pica_comic/network/hitomi_network/hitomi_main_network.dart';
-import 'package:pica_comic/network/res.dart';
 import 'package:pica_comic/tools/translations.dart';
 import '../../foundation/app.dart';
 import '../../network/hitomi_network/hitomi_models.dart';
@@ -13,59 +13,80 @@ class HitomiHomePageLogic extends StateController {
   ComicList? comics;
   List<HitomiComicBrief> hitomiComics = [];
 
+  /// build() 里会调用 get()/loadNextPage()，加标记避免同一时刻重复请求
+  bool _fetching = false;
+  bool _loadingNext = false;
+
   void get(String url) async {
+    if (_fetching) return;
+    _fetching = true;
     var res = await HiNetwork().getComics(url);
     if (res.error) {
-      message = res.errorMessage!;
-    } else {
-      var parseRes = await parseIds(res.data);
-      if(parseRes) {
-        comics = res.data;
-      }
+      message = res.errorMessage ?? "Network Error";
+      loading = false;
+      _fetching = false;
+      update();
+      return;
+    }
+    // 先保存列表：parseIds 取到第一批简介后即可结束 loading，
+    // 让首屏卡片尽早出现，剩余画廊信息在后台继续加载。
+    comics = res.data;
+    var parseRes = await parseIds(comics!, firstLoad: true);
+    if (!parseRes && hitomiComics.isEmpty) {
+      message = "加载失败，请重试";
     }
     loading = false;
+    _fetching = false;
     update();
   }
 
   void loadNextPage(String url) async {
+    // 首批简介仍在解析时不要并发翻页：两个 parseIds 会同时消费
+    // comics.comicIds，导致重复/丢失条目。
+    if (comics == null || _fetching || _loadingNext) return;
+    _loadingNext = true;
     var res = await HiNetwork().loadNextPage(comics!);
     if (res.error) {
       showToast(message: res.errorMessage!);
     } else {
       var parseRes = await parseIds(comics!);
-      if(parseRes) {
+      if (parseRes) {
         update();
-      } else {
+      } else if (hitomiComics.isEmpty) {
         showToast(message: message ?? "Error");
       }
     }
+    _loadingNext = false;
   }
 
-  Future<bool> parseIds(ComicList comics) async {
-    var futures = <Future<Res<HitomiComicBrief>>>[];
-    Future<bool> wait() async {
-      var result = await Future.wait(futures);
-      futures.clear();
+  /// 分批拉取画廊简介。
+  ///
+  /// 单个 galleryblock 失败（hitomi 边缘节点经常超时）不再让整页失败，
+  /// 只跳过该条目；首批成功后立即通知 UI，剩余批次继续填充。
+  Future<bool> parseIds(ComicList comics, {bool firstLoad = false}) async {
+    var failed = 0;
+    var added = 0;
+    while (comics.comicIds.isNotEmpty) {
+      var batch = comics.comicIds.take(5).toList();
+      var result = await Future.wait(
+          batch.map((id) => HiNetwork().getComicInfoBrief(id.toString())));
       for (var r in result) {
-        if(r.error) {
-          message = r.errorMessage;
-          return false;
+        if (r.error) {
+          failed++;
+          LogManager.addLog(LogLevel.warning, "Hitomi",
+              "Failed to load gallery brief: ${r.errorMessage}");
+          continue;
         }
         hitomiComics.add(r.data);
+        added++;
       }
-      return true;
-    }
-    for(var id in comics.comicIds) {
-      if(futures.length >= 5) {
-        var res = await wait();
-        if(!res) return false;
+      comics.comicIds.removeRange(0, batch.length);
+      if (firstLoad && added > 0) {
+        loading = false;
+        update();
       }
-      futures.add(HiNetwork().getComicInfoBrief(id.toString()));
     }
-    var res = await wait();
-    if(!res) return false;
-    comics.comicIds.clear();
-    return true;
+    return added > 0 || failed == 0;
   }
 
   void refresh_() {
@@ -73,6 +94,9 @@ class HitomiHomePageLogic extends StateController {
     comics = null;
     message = null;
     currentPage = 1;
+    hitomiComics.clear();
+    _fetching = false;
+    _loadingNext = false;
     update();
   }
 }

@@ -21,7 +21,6 @@ import 'package:pica_comic/tools/file_type.dart';
 import '../base.dart';
 import '../network/eh_network/eh_main_network.dart';
 import '../network/hitomi_network/image.dart';
-import '../network/jm_network/jm_network.dart';
 import '../network/jm_network/headers.dart';
 import '../network/res.dart';
 
@@ -53,6 +52,154 @@ class ImageManager {
 
   final dio = logDio(BaseOptions())
     ..interceptors.add(CookieManagerSql(SingleInstanceCookieJar.instance!));
+
+  /// Web only: Dio used to call the same-origin `/api/img/sign` endpoint.
+  /// `createPicaDio` installs the browser adapter for same-origin URLs.
+  static Dio? _signDio;
+
+  static Dio get _signClient => _signDio ??= createPicaDio(BaseOptions(
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 20)));
+
+  /// Signed image URLs, keyed by the original URL and every signing input.
+  /// The gateway derives a deterministic token per (url, headers, profile,
+  /// jm) inside its expiry window, so this cache mostly avoids the extra
+  /// round trip; it also keeps the browser cache key stable.
+  static final Map<String, _SignedImage> _signedImages = {};
+
+  static const int _signedImageLimit = 512;
+
+  /// Headers that must never be copied into a signed URL: browsers own
+  /// Cookie/Connection/hop-by-hop state and the gateway cookie vault injects
+  /// origin cookies itself. `Accept-Encoding` is negotiated by the gateway's
+  /// HTTP client. Everything else is replayed by the gateway from the token.
+  static Map<String, String> signableImageHeaders(
+      Map<String, String> headers) {
+    final out = <String, String>{};
+    headers.forEach((name, value) {
+      final lower = name.toLowerCase();
+      const blocked = {
+        "cookie",
+        "host",
+        "content-length",
+        "accept-encoding",
+        "connection",
+        "keep-alive",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+      };
+      if (blocked.contains(lower) || lower.startsWith("proxy-")) {
+        return;
+      }
+      out[name] = value;
+    });
+    return out;
+  }
+
+  static String _signedImageKey(String url, Map<String, String> headers,
+      String? profile, Map<String, String>? jm) {
+    final entries = headers.entries.toList()
+      ..sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase()));
+    return jsonEncode([
+      url,
+      profile,
+      jm,
+      [
+        for (final entry in entries) [entry.key.toLowerCase(), entry.value]
+      ],
+    ]);
+  }
+
+  /// Signs [url] through `POST /api/img/sign`. Returns null on any failure so
+  /// callers can fall back to the legacy tunnel path.
+  Future<String?> _signImageUrl(String url, Map<String, String> headers,
+      {String? profile, Map<String, String>? jm}) async {
+    if (!kIsWeb) {
+      return null;
+    }
+    final key = _signedImageKey(
+        url, signableImageHeaders(headers), profile, jm);
+    final now = DateTime.now();
+    final cached = _signedImages[key];
+    if (cached != null &&
+        cached.expiresAt.isAfter(now.add(const Duration(minutes: 2)))) {
+      return cached.path;
+    }
+    try {
+      final body = <String, dynamic>{"url": url, "ttl": 86400};
+      final signable = signableImageHeaders(headers);
+      if (signable.isNotEmpty) {
+        body["headers"] = signable;
+      }
+      if (profile != null) {
+        body["profile"] = profile;
+      }
+      if (jm != null) {
+        body["jm"] = jm;
+      }
+      final res = await _signClient.post<dynamic>("/api/img/sign", data: body);
+      final data = res.data;
+      if (data is! Map || data["url"] is! String) {
+        log("Invalid image sign response: $data", "Network", LogLevel.warning);
+        return null;
+      }
+      final signed = data["url"] as String;
+      var expiresAt = now.add(const Duration(hours: 1));
+      final rawExpiry = data["expiresAt"];
+      if (rawExpiry is String) {
+        expiresAt =
+            DateTime.tryParse(rawExpiry)?.toLocal() ?? expiresAt;
+      }
+      if (_signedImages.length >= _signedImageLimit) {
+        _signedImages.remove(_signedImages.keys.first);
+      }
+      _signedImages[key] = _SignedImage(signed, expiresAt);
+      return signed;
+    } catch (e) {
+      log("Failed to sign image URL, falling back to tunnel: $e", "Network",
+          LogLevel.warning);
+      return null;
+    }
+  }
+
+  /// Web only: fetches an image through a signed same-origin GET so the
+  /// browser and the gateway's disk cache can serve it. Returns null when the
+  /// request cannot be signed or fails; the caller then uses the legacy tunnel.
+  ///
+  /// The fetch intentionally sends no headers: the upstream credentials and
+  /// source headers are part of the signed token.
+  Future<Response<ResponseBody>?> _getSignedImageResponse(String url,
+      Map<String, String> headers,
+      {String? profile, Map<String, String>? jm}) async {
+    if (!kIsWeb) {
+      return null;
+    }
+    final uri = Uri.tryParse(url);
+    if (uri == null || (uri.scheme != "http" && uri.scheme != "https")) {
+      return null;
+    }
+    final signed =
+        await _signImageUrl(url, headers, profile: profile, jm: jm);
+    if (signed == null) {
+      return null;
+    }
+    try {
+      return await dio.get<ResponseBody>(signed,
+          options: Options(
+              responseType: ResponseType.stream,
+              headers: const <String, String>{}));
+    } catch (e) {
+      // Drop the memoized URL: it may be a token the gateway now rejects
+      // (rotated secret, clock jump). The next attempt signs again.
+      _signedImages
+          .remove(_signedImageKey(url, signableImageHeaders(headers), profile, jm));
+      log("Signed image fetch failed, falling back to tunnel: $e", "Network",
+          LogLevel.warning);
+      return null;
+    }
+  }
 
   int ehgtLoading = 0;
 
@@ -96,7 +243,8 @@ class ImageManager {
           ehgtLoading++;
         }
       }
-      var dioRes = await dio.get<ResponseBody>(realUrl,
+      var dioRes = await _getSignedImageResponse(realUrl, headers);
+      dioRes ??= await dio.get<ResponseBody>(realUrl,
           options:
               Options(responseType: ResponseType.stream, headers: headers));
       if (dioRes.data == null) {
@@ -561,14 +709,32 @@ class ImageManager {
 
       var bytes = <int>[];
       String? ext;
+      // On Web the gateway can recombine the JM scramble server-side (and
+      // cache the result), which also lets the browser cache the final image.
+      // Older gateways pass WebP through untouched; those responses still
+      // need the client-side recombine below.
+      var gatewayRecombined = false;
       try {
-        var res = await dio.get<ResponseBody>(
-            url,
-            options: Options(
-                responseType: ResponseType.stream,
-                headers: getImgHeaders()
-            )
-        );
+        Response<ResponseBody>? signedRes = await _getSignedImageResponse(
+            url, const {},
+            profile: "jm",
+            jm: {
+              "epsId": epsId,
+              "scrambleId": scrambleId,
+              "bookId": bookId,
+            });
+        if (signedRes != null) {
+          final rawContentType = signedRes.headers["Content-Type"] ??
+              signedRes.headers["content-type"];
+          final contentType = rawContentType?.first.toLowerCase();
+          gatewayRecombined = contentType != null &&
+              !contentType.contains("webp");
+        }
+        final res = signedRes ??
+            await dio.get<ResponseBody>(url,
+                options: Options(
+                    responseType: ResponseType.stream,
+                    headers: getImgHeaders()));
         ext = getExt(res);
         var stream = res.data!.stream;
         await for (var b in stream) {
@@ -591,7 +757,12 @@ class ImageManager {
       );
       yield progress;
       loadingItems[urlWithoutParam] = progress;
-      if (url.split('.').last != "gif") {
+      // JM currently serves WebP for nearly all pages and those files are
+      // scrambled exactly like the older JPEGs: the gateway recombines both
+      // formats (live-verified against chapter 1487055), so WebP must NOT be
+      // skipped here. Only pages that did not come back already recombined
+      // from a current gateway take this client-side pass.
+      if (url.split('.').last != "gif" && !gatewayRecombined) {
         bytes = await startRecombineAndWriteImage(
             Uint8List.fromList(bytes), epsId, scrambleId, bookId, savePath);
       }
@@ -895,6 +1066,13 @@ class DownloadProgress {
       [this.data, this.ext]);
 
   File getFile() => File(savePath);
+}
+
+class _SignedImage {
+  final String path;
+  final DateTime expiresAt;
+
+  const _SignedImage(this.path, this.expiresAt);
 }
 
 class ImageExceedError extends Error {

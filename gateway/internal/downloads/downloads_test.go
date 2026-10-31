@@ -1,10 +1,13 @@
 package downloads
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/jpeg"
 	"io"
 	"log/slog"
 	"net/http"
@@ -650,5 +653,48 @@ func TestJobViewExposesFiles(t *testing.T) {
 	}
 	if len(v.Files) != 2 || v.Files[0] != "001.png" || v.Files[1] != "003.jpg" {
 		t.Fatalf("files = %v", v.Files)
+	}
+}
+
+// TestApplyJMRecombinesWebP verifies the server-side downloader fixes live
+// WebP pages too. The fixture is a lossless 8x24 WebP with 12 gray stripes in
+// scrambled (reverse) order; applyJM must restore the order and report the
+// JPEG extension of the re-encoded output.
+func TestApplyJMRecombinesWebP(t *testing.T) {
+	const scrambledWebP = "UklGRkYAAABXRUJQVlA4TDoAAAAvB8AFAF8gFkwkdudPGsMpPE7hMf/Z4YCQtp1MYQpTmEIKKaSQQgoppBDfdYjof34el8NmMRk0RRIA"
+	raw, err := base64.StdEncoding.DecodeString(scrambledWebP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := New(testOptions(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	page := Page{
+		URL: "http://up/a.webp",
+		JM:  &JMInfo{EpsID: "500000", ScrambleID: "220980", BookID: "00001"},
+	}
+	out, ext, err := m.applyJM(page, raw, "webp", "image/webp")
+	if err != nil {
+		t.Fatalf("applyJM: %v", err)
+	}
+	if ext != "jpg" {
+		t.Fatalf("ext = %q, want jpg", ext)
+	}
+	if len(out) < 3 || out[0] != 0xff || out[1] != 0xd8 || out[2] != 0xff {
+		t.Fatalf("output is not JPEG (len=%d)", len(out))
+	}
+	img, err := jpeg.Decode(bytes.NewReader(out))
+	if err != nil {
+		t.Fatalf("decode output: %v", err)
+	}
+	for i := 0; i < 12; i++ {
+		want := uint32(30 + i*20)
+		r, _, _, _ := img.At(4, i*2+1).RGBA()
+		if got := r >> 8; got > want+6 || got+6 < want {
+			t.Fatalf("stripe %d = %d, want %d", i, got, want)
+		}
 	}
 }

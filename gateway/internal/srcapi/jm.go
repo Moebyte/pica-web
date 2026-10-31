@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"picagateway/internal/downloads"
 	"picagateway/internal/imgproxy"
 )
 
@@ -472,44 +473,106 @@ func (s *jmSource) Comic(ctx context.Context, id string) (*Comic, error) {
 	}, nil
 }
 
-// Pages lists one chapter's images as signed /api/img URLs carrying the JM
-// scramble parameters so the proxy recombines JPEGs on cache misses.
-func (s *jmSource) Pages(ctx context.Context, comicID, ep string) ([]string, error) {
-	if ep == "" {
-		return nil, errBadRequest("missing_ep", "ep query parameter (chapter id) is required")
+// JMImageHeaders returns the headers the JM image CDN expects. It is the same
+// set the gateway registers as the built-in "jm" image-header profile, shared
+// by the image proxy and the server-side downloader.
+func JMImageHeaders() map[string]string {
+	return map[string]string{
+		"Accept":                   "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+		"Accept-Language":          "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+		"Referer":                  "https://localhost/",
+		"Sec-Fetch-Dest":           "image",
+		"Sec-Fetch-Mode":           "no-cors",
+		"Sec-Fetch-Site":           "cross-site",
+		"Sec-Fetch-Storage-Access": "active",
+		"User-Agent":               JMUserAgent,
+		"X-Requested-With":         "com.example.app",
 	}
+}
+
+// chapterImages fetches /chapter for ep and returns the raw image names plus
+// the scramble id (defaulting to the app-wide constant).
+func (s *jmSource) chapterImages(ctx context.Context, ep string) ([]string, string, error) {
 	raw, err := s.apiGet(ctx, "/chapter?&id="+url.QueryEscape(ep))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if string(raw) == "[]" {
-		return nil, errNotFound("jm chapter " + ep + " does not exist")
+		return nil, "", errNotFound("jm chapter " + ep + " does not exist")
 	}
 	var chapter struct {
 		Images     []string `json:"images"`
 		ScrambleID any      `json:"scramble_id"`
 	}
 	if err := json.Unmarshal(raw, &chapter); err != nil {
-		return nil, errUpstream("jm chapter: %v", err)
+		return nil, "", errUpstream("jm chapter: %v", err)
 	}
 	if len(chapter.Images) == 0 {
-		return nil, errNotFound("jm chapter has no images")
+		return nil, "", errNotFound("jm chapter has no images")
 	}
 	scramble := jmDefaultScramble
 	if sc, ok := toString(chapter.ScrambleID); ok && sc != "" {
 		scramble = sc
 	}
+	return chapter.Images, scramble, nil
+}
+
+// jmBookID strips the extension/query from an image file name ("00001.jpg" ->
+// "00001"); the Dart client does the same before recombining.
+func jmBookID(name string) string {
+	bookID := name
+	if i := strings.IndexAny(bookID, ".?"); i >= 0 {
+		bookID = bookID[:i]
+	}
+	return bookID
+}
+
+// Pages lists one chapter's images as signed /api/img URLs carrying the JM
+// scramble parameters so the proxy recombines JPEGs on cache misses.
+func (s *jmSource) Pages(ctx context.Context, comicID, ep string) ([]string, error) {
+	if ep == "" {
+		return nil, errBadRequest("missing_ep", "ep query parameter (chapter id) is required")
+	}
+	images, scramble, err := s.chapterImages(ctx, ep)
+	if err != nil {
+		return nil, err
+	}
 	base := s.imgBaseURL(ctx)
 	now := time.Now()
-	pages := make([]string, 0, len(chapter.Images))
-	for _, name := range chapter.Images {
+	pages := make([]string, 0, len(images))
+	for _, name := range images {
 		imgURL := fmt.Sprintf("%s/media/photos/%s/%s", base, ep, name)
-		bookID := name
-		if i := strings.IndexAny(bookID, ".?"); i >= 0 {
-			bookID = bookID[:i]
-		}
-		jm := &imgproxy.JMParams{EpsID: ep, ScrambleID: scramble, BookID: bookID}
+		jm := &imgproxy.JMParams{EpsID: ep, ScrambleID: scramble, BookID: jmBookID(name)}
 		pages = append(pages, s.deps.signImage(imgURL, jmImageProfile, jm, now))
+	}
+	return pages, nil
+}
+
+// DownloadPages resolves one chapter into raw upstream pages for the
+// server-side download queue: direct CDN URLs, the headers the image CDN
+// needs, and the JM scramble parameters. An empty ep falls back to the comic
+// id, which is the chapter id of single-chapter albums.
+func (s *jmSource) DownloadPages(ctx context.Context, comicID, ep string) ([]downloads.Page, error) {
+	ep = strings.TrimSpace(ep)
+	if ep == "" {
+		ep = strings.TrimSpace(comicID)
+	}
+	if ep == "" {
+		return nil, errBadRequest("missing_ep", "ep (chapter id) is required")
+	}
+	images, scramble, err := s.chapterImages(ctx, ep)
+	if err != nil {
+		return nil, err
+	}
+	base := s.imgBaseURL(ctx)
+	headers := JMImageHeaders()
+	pages := make([]downloads.Page, 0, len(images))
+	for _, name := range images {
+		pages = append(pages, downloads.Page{
+			URL:     fmt.Sprintf("%s/media/photos/%s/%s", base, ep, name),
+			Headers: headers,
+			JM:      &downloads.JMInfo{EpsID: ep, ScrambleID: scramble, BookID: jmBookID(name)},
+		})
 	}
 	return pages, nil
 }

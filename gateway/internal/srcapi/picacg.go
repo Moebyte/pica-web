@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"picagateway/internal/downloads"
 	"picagateway/internal/vault"
 )
 
@@ -554,24 +555,25 @@ func (s *picacgSource) fetchChapters(ctx context.Context, id string) ([]Chapter,
 	return chapters, nil
 }
 
-// Pages lists one chapter's images, paging through the chapter image list.
-func (s *picacgSource) Pages(ctx context.Context, comicID, ep string) ([]string, error) {
-	if _, err := s.requireCred(ctx); err != nil {
-		return nil, err
-	}
-	if ep == "" {
-		return nil, errBadRequest("missing_ep", "ep query parameter (chapter order) is required")
-	}
+// picacgChapterOrder validates the chapter identifier used by
+// /comics/{id}/order/{order}/pages (a 1-based order number).
+func picacgChapterOrder(ep string) (int, error) {
 	order, err := strconv.Atoi(strings.TrimSpace(ep))
 	if err != nil || order <= 0 {
-		return nil, errBadRequest("invalid_ep", "ep must be a positive chapter order number")
+		return 0, errBadRequest("invalid_ep", "ep must be a positive chapter order number")
 	}
-	var pages []string
+	return order, nil
+}
+
+// fetchPageRefs pages through one chapter's image list and returns the raw
+// {fileServer,path} references.
+func (s *picacgSource) fetchPageRefs(ctx context.Context, comicID string, order int) ([]imageRef, error) {
+	var refs []imageRef
 	for p := 1; p <= picacgMaxListPages; p++ {
-		raw, aerr := s.apiCall(ctx, http.MethodGet,
+		raw, err := s.apiCall(ctx, http.MethodGet,
 			fmt.Sprintf("comics/%s/order/%d/pages?page=%d", urlPathEscape(comicID), order, p), nil)
-		if aerr != nil {
-			return nil, aerr
+		if err != nil {
+			return nil, err
 		}
 		var doc struct {
 			Pages struct {
@@ -584,12 +586,67 @@ func (s *picacgSource) Pages(ctx context.Context, comicID, ep string) ([]string,
 		if err := json.Unmarshal(raw, &doc); err != nil {
 			return nil, errUpstream("picacg pages: %v", err)
 		}
-		now := time.Now()
 		for _, d := range doc.Pages.Docs {
-			pages = append(pages, s.deps.signImage(d.Media.URL(), "", nil, now))
+			refs = append(refs, d.Media)
 		}
 		if doc.Pages.Pages <= p {
 			break
+		}
+	}
+	return refs, nil
+}
+
+// Pages lists one chapter's images, paging through the chapter image list.
+func (s *picacgSource) Pages(ctx context.Context, comicID, ep string) ([]string, error) {
+	if _, err := s.requireCred(ctx); err != nil {
+		return nil, err
+	}
+	if ep == "" {
+		return nil, errBadRequest("missing_ep", "ep query parameter (chapter order) is required")
+	}
+	order, err := picacgChapterOrder(ep)
+	if err != nil {
+		return nil, err
+	}
+	refs, err := s.fetchPageRefs(ctx, comicID, order)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	pages := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		pages = append(pages, s.deps.signImage(ref.URL(), "", nil, now))
+	}
+	if len(pages) == 0 {
+		return nil, errNotFound("picacg chapter has no images")
+	}
+	return pages, nil
+}
+
+// DownloadPages resolves one chapter into raw image URLs for the server-side
+// download queue. PicACG's static file servers need no special headers, so the
+// pages carry none and no JM parameters are attached. An empty ep falls back to
+// chapter order 1 (single-chapter comics).
+func (s *picacgSource) DownloadPages(ctx context.Context, comicID, ep string) ([]downloads.Page, error) {
+	if _, err := s.requireCred(ctx); err != nil {
+		return nil, err
+	}
+	order := 1
+	if strings.TrimSpace(ep) != "" {
+		var err error
+		order, err = picacgChapterOrder(ep)
+		if err != nil {
+			return nil, err
+		}
+	}
+	refs, err := s.fetchPageRefs(ctx, comicID, order)
+	if err != nil {
+		return nil, err
+	}
+	pages := make([]downloads.Page, 0, len(refs))
+	for _, ref := range refs {
+		if u := ref.URL(); u != "" {
+			pages = append(pages, downloads.Page{URL: u})
 		}
 	}
 	if len(pages) == 0 {

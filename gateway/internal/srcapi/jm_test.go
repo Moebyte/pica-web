@@ -192,12 +192,12 @@ func newFakeJM(t *testing.T) *fakeJM {
 				"tags": []string{"中文", "巨乳"}, "works": []string{"東方Project"}, "actors": []string{"霊夢"},
 			})
 		case r.URL.Path == "/chapter":
-			if r.URL.Query().Get("id") != "1490000" {
+			if id := r.URL.Query().Get("id"); id != "1490000" && id != "1487029" {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
 			f.writeEncrypted(w, timeStr, map[string]any{
-				"id":     "1490000",
+				"id":     r.URL.Query().Get("id"),
 				"images": []string{"00001.jpg", "00002.webp"},
 			})
 		default:
@@ -448,6 +448,65 @@ func TestJMPagesTokenCarriesJMParams(t *testing.T) {
 		if payload.Profile != "jm" {
 			t.Fatalf("page %d profile = %q", i, payload.Profile)
 		}
+	}
+}
+
+func TestJMDownloadPages(t *testing.T) {
+	s, f := newTestJM(t)
+	pages, err := s.DownloadPages(context.Background(), "1487029", "1490000")
+	if err != nil {
+		t.Fatalf("DownloadPages: %v", err)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("pages = %+v", pages)
+	}
+	wantURLs := []string{
+		f.imgSrv.URL + "/media/photos/1490000/00001.jpg",
+		f.imgSrv.URL + "/media/photos/1490000/00002.webp",
+	}
+	wantBooks := []string{"00001", "00002"}
+	for i, p := range pages {
+		if p.URL != wantURLs[i] {
+			t.Fatalf("page %d url = %q, want %q", i, p.URL, wantURLs[i])
+		}
+		if p.JM == nil {
+			t.Fatalf("page %d has no jm params", i)
+		}
+		if p.JM.EpsID != "1490000" || p.JM.ScrambleID != jmDefaultScramble || p.JM.BookID != wantBooks[i] {
+			t.Fatalf("page %d jm = %+v", i, p.JM)
+		}
+		if p.Headers["Referer"] != "https://localhost/" ||
+			p.Headers["User-Agent"] != JMUserAgent ||
+			p.Headers["X-Requested-With"] != "com.example.app" {
+			t.Fatalf("page %d headers = %+v", i, p.Headers)
+		}
+		if !strings.HasPrefix(p.Headers["Accept"], "image/") {
+			t.Fatalf("page %d accept = %q", i, p.Headers["Accept"])
+		}
+	}
+	// No signed gateway URLs: the downloader must see the upstream URL.
+	for _, p := range pages {
+		if strings.HasPrefix(p.URL, "/api/img/") {
+			t.Fatalf("page url is signed: %q", p.URL)
+		}
+	}
+
+	// An empty ep falls back to the comic id (single-chapter albums).
+	fallback, err := s.DownloadPages(context.Background(), "1487029", "")
+	if err != nil {
+		t.Fatalf("DownloadPages fallback: %v", err)
+	}
+	if len(fallback) != 2 || fallback[0].JM == nil || fallback[0].JM.EpsID != "1487029" {
+		t.Fatalf("fallback pages = %+v", fallback)
+	}
+	seen := false
+	for _, q := range f.recorded() {
+		if q == "GET /chapter?&id=1487029" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatalf("chapter fallback request not recorded: %v", f.recorded())
 	}
 }
 

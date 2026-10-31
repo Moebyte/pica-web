@@ -6,6 +6,7 @@ import 'package:pica_comic/foundation/app.dart';
 import 'package:pica_comic/network/base_comic.dart';
 import 'package:pica_comic/network/res.dart';
 import 'package:pica_comic/pages/category_comics_page.dart';
+import 'package:pica_comic/pages/accounts_page.dart';
 import 'package:pica_comic/pages/search_result_page.dart';
 import 'package:pica_comic/tools/extensions.dart';
 import 'package:pica_comic/tools/translations.dart';
@@ -233,10 +234,22 @@ class _SingleExplorePageState extends StateWithController<_SingleExplorePage> {
         child: CircularProgressIndicator(),
       );
     } else if (message != null) {
+      // picacg 未登录时所有探索请求都会返回“未登录”。只给“重试”按钮会让
+      // 用户反复点击却永远失败，这里直接提供前往账号页的入口。
+      final needLogin = message!.contains("未登录");
       return NetworkError(
         message: message!,
         retry: refresh,
         withAppbar: false,
+        extraAction: needLogin
+            ? FilledButton(
+                onPressed: () => showPopUpWidget(
+                  App.globalContext!,
+                  const AccountsPage(),
+                ),
+                child: Text("去登录".tl),
+              )
+            : null,
       );
     } else {
       return buildPage();

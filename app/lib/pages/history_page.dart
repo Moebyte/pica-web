@@ -73,6 +73,7 @@ class _HistoryPageState extends State<HistoryPage> {
     if (searchMode) {
       find();
     }
+    final shown = searchMode ? results : comics;
     return Scaffold(
       body: SmoothCustomScrollView(
         slivers: [
@@ -121,7 +122,30 @@ class _HistoryPageState extends State<HistoryPage> {
               )
             ],
           ),
-          if (!searchMode) buildComics(comics) else buildComics(results),
+          if (shown.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.history,
+                      size: 64,
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      searchMode ? "没有匹配的历史记录".tl : "暂无阅读历史".tl,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.outline),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            buildComics(shown),
           SliverPadding(
             padding:
                 EdgeInsets.only(top: MediaQuery.of(context).padding.bottom),

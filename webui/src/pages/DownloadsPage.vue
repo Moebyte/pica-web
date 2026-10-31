@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from 'vue'
 import {
   listDownloadJobs,
   deleteDownloadJob,
@@ -35,6 +35,7 @@ const statusMeta: Record<string, { label: string; cls: string }> = {
   done: { label: '已完成', cls: 'done' },
   partial: { label: '部分完成', cls: 'partial' },
   failed: { label: '失败', cls: 'failed' },
+  error: { label: '失败', cls: 'failed' },
   paused: { label: '已暂停', cls: 'paused' },
   stopped: { label: '已停止', cls: 'paused' },
 }
@@ -113,10 +114,17 @@ function onVisibility(): void {
 }
 
 onMounted(() => {
-  void refresh()
-  startPolling()
   document.addEventListener('visibilitychange', onVisibility)
 })
+
+// KeepAlive: refresh + restart polling every time the page is re-entered
+// (e.g. right after submitting a download from the comic detail page).
+onActivated(() => {
+  void refresh()
+  startPolling()
+})
+
+onDeactivated(() => stopPolling())
 
 onBeforeUnmount(() => {
   stopPolling()

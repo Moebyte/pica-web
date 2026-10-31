@@ -585,7 +585,9 @@ func (m *Manager) fetchPage(ctx context.Context, page Page) (body []byte, conten
 }
 
 // applyJM reverses the JM block scramble when the page carries jm info.
-// Non-JPEG payloads are saved unchanged with a warning.
+// JPEG and WebP pages are recombined; WebP output is re-encoded as JPEG
+// (ext "jpg") because no pure-Go WebP encoder is available. Other payloads
+// are saved unchanged with a warning.
 func (m *Manager) applyJM(page Page, body []byte, ext, contentType string) ([]byte, string, error) {
 	info := page.JM
 	epsID, err := parseJMInt("epsId", info.EpsID)
@@ -600,8 +602,8 @@ func (m *Manager) applyJM(page Page, body []byte, ext, contentType string) ([]by
 	if num <= 1 {
 		return body, ext, nil
 	}
-	if !jmimage.IsJPEG(ext, contentType) {
-		m.log.Warn("download page: jm scramble on non-JPEG, saving as-is",
+	if !jmimage.IsJPEG(ext, contentType) && !jmimage.IsWebP(ext, contentType) {
+		m.log.Warn("download page: jm scramble on non-JPEG/non-WebP, saving as-is",
 			"target", page.URL, "ext", ext, "contentType", contentType)
 		return body, ext, nil
 	}
@@ -609,7 +611,7 @@ func (m *Manager) applyJM(page Page, body []byte, ext, contentType string) ([]by
 	if err != nil {
 		return nil, "", fmt.Errorf("jm recombine: %w", err)
 	}
-	return out, ext, nil
+	return out, "jpg", nil
 }
 
 func parseJMInt(name, v string) (int, error) {

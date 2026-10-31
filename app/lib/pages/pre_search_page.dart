@@ -113,8 +113,8 @@ class _FloatingSearchBarState extends State<_FloatingSearchBar> {
 class PreSearchController extends StateController {
   String target = '';
 
-  SearchPageData get searchPageData =>
-      ComicSource.find(target)!.searchPageData!;
+  SearchPageData? get searchPageData =>
+      ComicSource.find(target)?.searchPageData;
 
   var options = <String>[];
 
@@ -145,7 +145,15 @@ class PreSearchController extends StateController {
   PreSearchController() {
     var searchSource = <String>[];
     for (var source in ComicSource.sources) {
-      searchSource.add(source.key);
+      if (source.searchPageData != null) {
+        searchSource.add(source.key);
+      }
+    }
+    if (searchSource.isEmpty) {
+      // 所有源都被禁用/初始化失败时，不要让 first 抛异常导致整个搜索页
+      // 无法构建（用户看到的就是一直空白/转圈）。页面会渲染降级提示。
+      target = '';
+      return;
     }
     if (!searchSource.contains(appdata.appSettings.initialSearchTarget)) {
       appdata.appSettings.initialSearchTarget = searchSource.first;
@@ -171,9 +179,15 @@ class PreSearchPage extends StatelessWidget {
 
   void search([String? s, String? type]) {
     var keyword = (s ?? controller.text).trim();
+    var target = type ?? searchController.target;
+    var targetData = ComicSource.find(target)?.searchPageData;
+    if (targetData == null) {
+      showToast(message: "没有可用的漫画源".tl);
+      return;
+    }
 
     if (searchController.language != null &&
-        searchController.searchPageData.enableLanguageFilter) {
+        targetData.enableLanguageFilter) {
       // 在添加语言筛选前，先移除掉可能存在的 language: 部分
       // 主要是为了解决强迫症
       final languagePattern = RegExp(r'\s*language:\w+');
@@ -185,7 +199,7 @@ class PreSearchPage extends StatelessWidget {
     context.to(
       () => SearchResultPage(
         keyword: keyword,
-        sourceKey: type ?? searchController.target,
+        sourceKey: target,
         options: searchController.options,
       ),
     );
@@ -210,7 +224,9 @@ class PreSearchPage extends StatelessWidget {
       }
     }
 
-    if (!searchController.searchPageData.enableTagsSuggestions) return;
+    if (!(searchController.searchPageData?.enableTagsSuggestions ?? false)) {
+      return;
+    }
 
     bool check(String text, String key, String value) {
       if (text.removeAllBlank == "") {
@@ -252,6 +268,35 @@ class PreSearchPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (ComicSource.find(searchController.target)?.searchPageData == null) {
+      // 降级：源列表为空或初始化失败时不再让 buildTargetSelector /
+      // buildSearchOptions 对 null 解引用而抛异常。
+      return Scaffold(
+        appBar: AppBar(title: Text("搜索".tl)),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.search_off, size: 64),
+                const SizedBox(height: 12),
+                Text(
+                  "没有可用的漫画源".tl,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  "请到设置中启用至少一个漫画源，或重启应用后重试".tl,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     return Scaffold(
       floatingActionButton: FloatingActionButton(
         onPressed: search,
@@ -593,16 +638,19 @@ class PreSearchPage extends StatelessWidget {
     return StateBuilder<PreSearchController>(
       id: "mode",
       builder: (logic) {
+        var data = logic.searchPageData;
+        if (data == null) {
+          return const SizedBox.shrink();
+        }
         var children = <Widget>[];
-        if (logic.searchPageData.customOptionsBuilder != null) {
+        if (data.customOptionsBuilder != null) {
           children.add(
-            logic.searchPageData.customOptionsBuilder!(context, [], (options) {
+            data.customOptionsBuilder!(context, [], (options) {
               logic.options = options;
             }),
           );
         } else {
-          final searchOptions =
-              logic.searchPageData.searchOptions ?? <SearchOptions>[];
+          final searchOptions = data.searchOptions ?? <SearchOptions>[];
           for (int i = 0; i < searchOptions.length; i++) {
             final option = searchOptions[i];
             children.add(ListTile(
@@ -624,7 +672,7 @@ class PreSearchPage extends StatelessWidget {
             ).paddingHorizontal(16));
           }
         }
-        if (logic.searchPageData.enableLanguageFilter) {
+        if (data.enableLanguageFilter) {
           children.add(buildLangSelector());
         }
         return Column(

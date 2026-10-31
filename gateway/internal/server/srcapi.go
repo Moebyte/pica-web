@@ -7,12 +7,17 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"picagateway/internal/downloads"
 	"picagateway/internal/srcapi"
 )
 
 // maxSrcLoginBody bounds the login payload.
 const maxSrcLoginBody = 16 << 10
+
+// maxSrcDownloadBody bounds the download submission payload.
+const maxSrcDownloadBody = 16 << 10
 
 // srcSource resolves {src}; unknown keys get a 404.
 func (s *Server) srcSource(w http.ResponseWriter, r *http.Request) srcapi.Source {
@@ -150,6 +155,113 @@ func (s *Server) handleSrcPages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "pages": pages})
+}
+
+// handleSrcComicDownload resolves a chapter into raw upstream pages and
+// enqueues it on the shared download manager. The source must implement
+// srcapi.Downloader. An omitted ep selects the first chapter (or the source's
+// anonymous single chapter). Resubmitting the same job is idempotent and
+// reports "existed":true without downloading anything twice.
+func (s *Server) handleSrcComicDownload(w http.ResponseWriter, r *http.Request) {
+	src := s.srcSource(w, r)
+	if src == nil {
+		return
+	}
+	downloader, ok := src.(srcapi.Downloader)
+	if !ok {
+		s.writeSrcError(w, http.StatusNotFound, "download_not_supported",
+			"source "+src.Key()+" does not support server-side downloads")
+		return
+	}
+
+	defer r.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxSrcDownloadBody+1))
+	if err != nil {
+		s.writeSrcError(w, http.StatusBadRequest, "body_read_error", err.Error())
+		return
+	}
+	if len(raw) > maxSrcDownloadBody {
+		s.writeSrcError(w, http.StatusRequestEntityTooLarge, "body_too_large", "download body is too large")
+		return
+	}
+	var req struct {
+		EP     string `json:"ep"`
+		EPName string `json:"epName"`
+	}
+	if strings.TrimSpace(string(raw)) != "" {
+		if err := json.Unmarshal(raw, &req); err != nil {
+			s.writeSrcError(w, http.StatusBadRequest, "invalid_json", "request body is not valid JSON: "+err.Error())
+			return
+		}
+	}
+
+	comicID := r.PathValue("id")
+	comic, err := src.Comic(r.Context(), comicID)
+	if err != nil {
+		s.writeSrcAPIError(w, err)
+		return
+	}
+
+	ep := strings.TrimSpace(req.EP)
+	if ep == "" && len(comic.Chapters) > 0 {
+		ep = comic.Chapters[0].ID
+	}
+	epName := strings.TrimSpace(req.EPName)
+	if epName == "" {
+		for _, ch := range comic.Chapters {
+			if ch.ID == ep {
+				epName = ch.Title
+				break
+			}
+		}
+		if epName == "" && len(comic.Chapters) > 0 {
+			epName = comic.Chapters[0].Title
+		}
+	}
+	if epName == "" {
+		epName = ep
+	}
+
+	pages, err := downloader.DownloadPages(r.Context(), comicID, ep)
+	if err != nil {
+		s.writeSrcAPIError(w, err)
+		return
+	}
+	if len(pages) == 0 {
+		s.writeSrcError(w, http.StatusBadGateway, srcapi.CodeUpstreamError,
+			"source returned no pages for this chapter")
+		return
+	}
+
+	// downloads requires non-empty path segments; an empty ep means the source
+	// has no chapter list and exposes one anonymous chapter.
+	jobEP := ep
+	if jobEP == "" {
+		jobEP = "all"
+	}
+	job := downloads.Job{
+		ID:        src.Key() + "-" + comicID + "-" + jobEP,
+		Title:     comic.Title,
+		Source:    src.Key(),
+		ComicID:   comicID,
+		EP:        jobEP,
+		EPName:    epName,
+		Pages:     pages,
+		CreatedAt: time.Now().Unix(),
+	}
+	view, existed, err := s.downloads.Submit(job)
+	if err != nil {
+		switch {
+		case errors.Is(err, downloads.ErrInvalidJob):
+			s.writeSrcError(w, http.StatusBadRequest, "invalid_job", err.Error())
+		case errors.Is(err, downloads.ErrDirConflict):
+			s.writeSrcError(w, http.StatusConflict, "dir_conflict", err.Error())
+		default:
+			s.writeSrcError(w, http.StatusInternalServerError, "submit_failed", err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job": view, "existed": existed})
 }
 
 func (s *Server) handleSrcLogin(w http.ResponseWriter, r *http.Request) {

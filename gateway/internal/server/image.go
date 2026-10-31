@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -20,29 +22,103 @@ import (
 	"picagateway/internal/outbound"
 )
 
+// maxImageSignBody bounds the JSON body of POST /api/img/sign.
+const maxImageSignBody = 64 << 10
+
+// maxImageCacheAge caps the browser Cache-Control lifetime of an image
+// response. The token itself may live longer (up to the aligned window plus
+// grace), but one day is the useful ceiling for an episode page.
+const maxImageCacheAge = 86400
+
 func (s *Server) handleImageSign(w http.ResponseWriter, r *http.Request) {
 	rawURL := strings.TrimSpace(r.URL.Query().Get("url"))
-	if rawURL == "" {
-		writeError(w, http.StatusBadRequest, "missing_url", "url query parameter is required")
+	profile := strings.TrimSpace(r.URL.Query().Get("profile"))
+	ttl, ok := s.imageSignTTL(w, r.URL.Query().Get("ttl"))
+	if !ok {
 		return
 	}
-	profile := strings.TrimSpace(r.URL.Query().Get("profile"))
+	s.writeImageSign(w, r, rawURL, profile, nil, nil, ttl)
+}
+
+// handleImageSignPost issues a signed image URL from a JSON body:
+//
+//	{"url":"https://...","headers":{"Referer":"https://..."},"ttl":86400}
+//
+// Profile and JM scramble parameters are accepted as optional extensions so
+// the Flutter web client can ask the gateway to recombine JM pages. The
+// response has the same shape as the legacy GET endpoint.
+func (s *Server) handleImageSignPost(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxImageSignBody+1))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "body_read_error", err.Error())
+		return
+	}
+	if len(raw) > maxImageSignBody {
+		writeError(w, http.StatusBadRequest, "body_too_large",
+			fmt.Sprintf("request body exceeds %d bytes", maxImageSignBody))
+		return
+	}
+	var req struct {
+		URL     string             `json:"url"`
+		Headers map[string]string  `json:"headers"`
+		Profile string             `json:"profile"`
+		TTL     *int               `json:"ttl"`
+		JM      *imgproxy.JMParams `json:"jm"`
+	}
+	if len(strings.TrimSpace(string(raw))) > 0 {
+		if err := json.Unmarshal(raw, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_json", "request body is not valid JSON: "+err.Error())
+			return
+		}
+	}
+
+	ttl := s.cfg.ImgTokenTTLDuration()
+	if req.TTL != nil {
+		if *req.TTL <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid_ttl", "ttl must be a positive number of seconds")
+			return
+		}
+		ttl = time.Duration(*req.TTL) * time.Second
+		if ttl > imgproxy.MaxTokenTTL {
+			ttl = imgproxy.MaxTokenTTL
+		}
+	}
+
+	s.writeImageSign(w, r, strings.TrimSpace(req.URL), strings.TrimSpace(req.Profile),
+		req.Headers, req.JM, ttl)
+}
+
+// imageSignTTL parses the optional GET ttl query parameter.
+func (s *Server) imageSignTTL(w http.ResponseWriter, rawTTL string) (time.Duration, bool) {
+	ttl := s.cfg.ImgTokenTTLDuration()
+	rawTTL = strings.TrimSpace(rawTTL)
+	if rawTTL == "" {
+		return ttl, true
+	}
+	seconds, err := strconv.Atoi(rawTTL)
+	if err != nil || seconds <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid_ttl", "ttl must be a positive number of seconds")
+		return 0, false
+	}
+	ttl = time.Duration(seconds) * time.Second
+	if ttl > imgproxy.MaxTokenTTL {
+		ttl = imgproxy.MaxTokenTTL
+	}
+	return ttl, true
+}
+
+// writeImageSign validates the common signing inputs and returns the token.
+func (s *Server) writeImageSign(w http.ResponseWriter, r *http.Request, rawURL, profile string,
+	headers map[string]string, jm *imgproxy.JMParams, ttl time.Duration) {
+	if rawURL == "" {
+		writeError(w, http.StatusBadRequest, "missing_url", "url is required")
+		return
+	}
 	if profile != "" {
 		if _, ok := s.cfg.HeaderProfiles[profile]; !ok {
 			writeError(w, http.StatusBadRequest, "unknown_profile", "no such header profile")
 			return
-		}
-	}
-	ttl := s.cfg.ImgTokenTTLDuration()
-	if rawTTL := r.URL.Query().Get("ttl"); rawTTL != "" {
-		seconds, err := strconv.Atoi(rawTTL)
-		if err != nil || seconds <= 0 {
-			writeError(w, http.StatusBadRequest, "invalid_ttl", "ttl must be a positive number of seconds")
-			return
-		}
-		ttl = time.Duration(seconds) * time.Second
-		if ttl > 7*24*time.Hour {
-			ttl = 7 * 24 * time.Hour
 		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.Timeout())
@@ -53,7 +129,12 @@ func (s *Server) handleImageSign(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
-	token, exp := s.signer.Sign(rawURL, profile, ttl, now)
+	token, exp := s.signer.SignPayload(imgproxy.Payload{
+		URL:     rawURL,
+		Profile: profile,
+		Headers: headers,
+		JM:      jm,
+	}, ttl, now)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":        true,
 		"token":     token,
@@ -96,9 +177,10 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", entry.Mime)
 			w.Header().Set("ETag", `"`+key+`"`)
 			w.Header().Set("X-Cache", "HIT")
-			if s.cfg.CacheTTL > 0 {
-				w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", s.cfg.CacheTTL))
-			}
+			// Signed GETs must be browser-cacheable: the URL is deterministic
+			// for the token's lifetime, so a second page load can be served
+			// entirely from the browser cache.
+			w.Header().Set("Cache-Control", imageCacheControl(payload, time.Now()))
 			addImageSandbox(w, entry.Mime)
 			http.ServeContent(w, r, "", time.Time{}, entry.File)
 			return
@@ -114,6 +196,11 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 		for k, v := range s.cfg.HeaderProfiles[payload.Profile] {
 			req.Header.Set(k, v)
 		}
+	}
+	// Headers carried by the token (already filtered at signing time and
+	// filtered again by Verify) override the profile defaults.
+	for k, v := range payload.Headers {
+		req.Header.Set(k, v)
 	}
 	// JM tokens buffer the whole body for recombination; range requests are
 	// only honored on the streaming path (and later, on cache hits).
@@ -185,8 +272,8 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 	rangeRequested := r.Header.Get("Range") != ""
 	cacheable := s.cache.Enabled() && resp.StatusCode == http.StatusOK && isImage &&
 		!rangeRequested && resp.Header.Get("Content-Encoding") == ""
-	if cacheable && s.cfg.CacheTTL > 0 {
-		w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", s.cfg.CacheTTL))
+	if resp.StatusCode == http.StatusOK {
+		w.Header().Set("Cache-Control", imageCacheControl(payload, time.Now()))
 	}
 	if cacheable {
 		w.Header().Set("X-Cache", "MISS")
@@ -229,13 +316,32 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// imageCacheKey derives the disk cache key for a token payload. Tokens with
-// JM scramble parameters get their own namespace: the cached bytes are the
-// recombined image, which differs from the raw upstream bytes stored under a
-// plain token for the same URL.
+// imageCacheKey derives the disk cache key for a token payload. The key
+// covers everything that can change the upstream bytes or the transform:
+// URL, header profile, token headers and JM scramble parameters. Tokens with
+// JM scramble parameters get their own namespace because the cached bytes are
+// the recombined image.
 func imageCacheKey(p *imgproxy.Payload) string {
 	h := sha256.New()
 	h.Write([]byte(p.URL))
+	if p.Profile != "" {
+		h.Write([]byte{0})
+		h.Write([]byte(p.Profile))
+	}
+	if len(p.Headers) > 0 {
+		names := make([]string, 0, len(p.Headers))
+		for name := range p.Headers {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		h.Write([]byte{0, 'h'})
+		for _, name := range names {
+			h.Write([]byte(name))
+			h.Write([]byte{0})
+			h.Write([]byte(p.Headers[name]))
+			h.Write([]byte{0})
+		}
+	}
 	if p.JM != nil {
 		h.Write([]byte{0})
 		h.Write([]byte(p.JM.EpsID))
@@ -247,10 +353,25 @@ func imageCacheKey(p *imgproxy.Payload) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// serveJMImage serves a JM page image. JM scrambles JPEGs by reordering
-// vertical blocks; on a cache miss the body is buffered, recombined and only
-// the recombined result is cached and returned. Non-JPEG payloads (JM now
-// serves webp for most albums) are passed through unchanged with a warning.
+// imageCacheControl derives the browser cache lifetime from the remaining
+// token validity, capped at one day. Signed image URLs are deterministic for
+// their whole window, so the browser can reuse the response across reloads.
+func imageCacheControl(p *imgproxy.Payload, now time.Time) string {
+	maxAge := p.Exp - now.Unix()
+	if maxAge < 0 {
+		maxAge = 0
+	}
+	if maxAge > maxImageCacheAge {
+		maxAge = maxImageCacheAge
+	}
+	return fmt.Sprintf("private, max-age=%d", maxAge)
+}
+
+// serveJMImage serves a JM page image. JM scrambles both JPEGs and WebPs by
+// reordering vertical blocks; on a cache miss the body is buffered, recombined
+// and only the recombined result is cached and returned. JPEG/WebP input is
+// re-encoded as JPEG (the gateway has no pure-Go WebP encoder); other payloads
+// are passed through unchanged with a warning.
 func (s *Server) serveJMImage(w http.ResponseWriter, r *http.Request, resp *http.Response, payload *imgproxy.Payload, key string) {
 	mimeType := mediaType(resp.Header.Get("Content-Type"))
 
@@ -278,19 +399,19 @@ func (s *Server) serveJMImage(w http.ResponseWriter, r *http.Request, resp *http
 		ext = strings.ToLower(strings.TrimPrefix(path.Ext(u.Path), "."))
 	}
 	if num > 1 {
-		if jmimage.IsJPEG(ext, mimeType) {
+		supported := jmimage.IsJPEG(ext, mimeType) || jmimage.IsWebP(ext, mimeType) ||
+			jmimage.IsJPEGBytes(body) || jmimage.IsWebPBytes(body)
+		if !supported {
+			s.log.Warn("jm recombine skipped: payload is not JPEG or WebP",
+				"target", payload.URL, "contentType", mimeType, "ext", ext)
+		} else {
 			out, rerr := jmimage.Recombine(body, num)
 			if rerr != nil {
 				writeError(w, http.StatusBadGateway, "jm_recombine_failed", rerr.Error())
 				return
 			}
 			body = out
-			if !strings.HasPrefix(mimeType, "image/") {
-				mimeType = "image/jpeg"
-			}
-		} else {
-			s.log.Warn("jm recombine skipped: payload is not JPEG",
-				"target", payload.URL, "contentType", mimeType, "ext", ext)
+			mimeType = "image/jpeg"
 		}
 	}
 
@@ -305,11 +426,11 @@ func (s *Server) serveJMImage(w http.ResponseWriter, r *http.Request, resp *http
 	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("ETag", `"`+key+`"`)
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	if resp.StatusCode == http.StatusOK {
+		w.Header().Set("Cache-Control", imageCacheControl(payload, time.Now()))
+	}
 	if cacheable {
 		w.Header().Set("X-Cache", "MISS")
-		if s.cfg.CacheTTL > 0 {
-			w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", s.cfg.CacheTTL))
-		}
 	} else {
 		w.Header().Set("X-Cache", "BYPASS")
 	}

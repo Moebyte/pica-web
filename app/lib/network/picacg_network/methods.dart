@@ -61,7 +61,7 @@ class PicacgNetwork {
         if (reLogin.error) {
           return const Res(null, errorMessage: "登录失效且重新登录失败");
         } else {
-          return get(url, expiredTime: expiredTime);
+          return await get(url, expiredTime: expiredTime);
         }
       } else {
         return Res(null, errorMessage: "Invalid Status Code ${res.statusCode}");
@@ -120,7 +120,7 @@ class PicacgNetwork {
         if (reLogin.error) {
           return const Res(null, errorMessage: "登录失效且重新登录失败");
         } else {
-          return post(url, data);
+          return await post(url, data);
         }
       } else {
         return Res(null, errorMessage: "Invalid Status Code ${res.statusCode}");

@@ -38,6 +38,8 @@ type Options struct {
 	// DownloadPageTimeout overrides the per-page fetch timeout (60s by
 	// default); mainly for tests.
 	DownloadPageTimeout time.Duration
+	// Sources replaces the built-in source registry; mainly for tests.
+	Sources *srcapi.Registry
 }
 
 // Server is the gateway HTTP application.
@@ -96,16 +98,19 @@ func New(o Options) (*Server, error) {
 	s.downloads = dl
 
 	s.ensureHeaderProfiles()
-	s.src = srcapi.NewRegistry(srcapi.Deps{
-		Policy:    o.Policy,
-		Transport: s.transport, // raw policy transport: sources set their own headers
-		Signer:    o.Signer,
-		TokenTTL:  o.Config.ImgTokenTTLDuration(),
-		Timeout:   o.Config.Timeout(),
-		Tenant:    s.tenant,
-		Store:     o.Vault,
-		Log:       log,
-	})
+	s.src = o.Sources
+	if s.src == nil {
+		s.src = srcapi.NewRegistry(srcapi.Deps{
+			Policy:    o.Policy,
+			Transport: s.transport, // raw policy transport: sources set their own headers
+			Signer:    o.Signer,
+			TokenTTL:  o.Config.ImgTokenTTLDuration(),
+			Timeout:   o.Config.Timeout(),
+			Tenant:    s.tenant,
+			Store:     o.Vault,
+			Log:       log,
+		})
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
@@ -120,10 +125,12 @@ func New(o Options) (*Server, error) {
 	mux.Handle("GET /api/src/{src}/search", s.requireAuth(http.HandlerFunc(s.handleSrcSearch)))
 	mux.Handle("GET /api/src/{src}/comic/{id}", s.requireAuth(http.HandlerFunc(s.handleSrcComic)))
 	mux.Handle("GET /api/src/{src}/comic/{id}/pages", s.requireAuth(http.HandlerFunc(s.handleSrcPages)))
+	mux.Handle("POST /api/src/{src}/comic/{id}/download", s.requireAuth(http.HandlerFunc(s.handleSrcComicDownload)))
 	mux.Handle("POST /api/src/{src}/login", s.requireAuth(http.HandlerFunc(s.handleSrcLogin)))
 	mux.Handle("POST /api/src/{src}/logout", s.requireAuth(http.HandlerFunc(s.handleSrcLogout)))
 	mux.Handle("POST /api/tunnel", s.requireAuth(http.HandlerFunc(s.handleTunnel)))
 	mux.Handle("GET /api/img/sign", s.requireAuth(http.HandlerFunc(s.handleImageSign)))
+	mux.Handle("POST /api/img/sign", s.requireAuth(http.HandlerFunc(s.handleImageSignPost)))
 	mux.Handle("GET /api/img/{token}", s.requireAuth(http.HandlerFunc(s.handleImage)))
 	mux.Handle("GET /api/cookies", s.requireAuth(http.HandlerFunc(s.handleCookiesList)))
 	mux.Handle("DELETE /api/cookies", s.requireAuth(http.HandlerFunc(s.handleCookiesDelete)))
@@ -151,17 +158,7 @@ func (s *Server) ensureHeaderProfiles() {
 		s.cfg.HeaderProfiles = map[string]map[string]string{}
 	}
 	if _, ok := s.cfg.HeaderProfiles["jm"]; !ok {
-		s.cfg.HeaderProfiles["jm"] = map[string]string{
-			"Accept":                   "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-			"Accept-Language":          "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-			"Referer":                  "https://localhost/",
-			"Sec-Fetch-Dest":           "image",
-			"Sec-Fetch-Mode":           "no-cors",
-			"Sec-Fetch-Site":           "cross-site",
-			"Sec-Fetch-Storage-Access": "active",
-			"User-Agent":               srcapi.JMUserAgent,
-			"X-Requested-With":         "com.example.app",
-		}
+		s.cfg.HeaderProfiles["jm"] = srcapi.JMImageHeaders()
 	}
 }
 

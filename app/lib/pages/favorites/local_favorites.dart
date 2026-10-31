@@ -224,7 +224,7 @@ class CreateFolderDialog extends StatelessWidget {
                   if (error) {
                     showToast(message: message);
                   } else {
-                    StateController.find(tag: "me page").update();
+                    StateController.findOrNull(tag: "me_page")?.update();
                   }
                 },
               ),

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"time"
 
+	"picagateway/internal/downloads"
 	"picagateway/internal/imgproxy"
 	"picagateway/internal/outbound"
 )
@@ -143,6 +144,17 @@ type Source interface {
 	Login(ctx context.Context, username, password string) (*LoginResult, error)
 	// Logout drops persisted credentials.
 	Logout(ctx context.Context) error
+}
+
+// Downloader is an optional capability: a source that can resolve a chapter
+// into raw upstream pages for the server-side download queue. Unlike Pages,
+// no /api/img token is issued — the returned pages carry the direct upstream
+// URL, the headers the origin needs and, for JM, the scramble parameters.
+//
+// Sources assert this interface where needed, so existing Source
+// implementations stay valid without it.
+type Downloader interface {
+	DownloadPages(ctx context.Context, comicID, ep string) ([]downloads.Page, error)
 }
 
 // CredentialStore persists source credentials encrypted at rest. It is
@@ -309,6 +321,17 @@ func NewRegistry(deps Deps) *Registry {
 	r := &Registry{byKey: make(map[string]Source, 2)}
 	r.Register(newJM(deps))
 	r.Register(newPicacg(deps))
+	return r
+}
+
+// NewRegistryFrom builds a registry from explicit sources in order. The
+// default wiring is NewRegistry; this constructor exists so callers (tests)
+// can substitute the built-in sources.
+func NewRegistryFrom(sources ...Source) *Registry {
+	r := &Registry{byKey: make(map[string]Source, len(sources))}
+	for _, src := range sources {
+		r.Register(src)
+	}
 	return r
 }
 

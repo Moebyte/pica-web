@@ -16,7 +16,7 @@ func TestExampleConfigLoads(t *testing.T) {
 	if cfg.Password != "change-me" {
 		t.Errorf("password = %q", cfg.Password)
 	}
-	if len(cfg.AllowHosts) != 54 {
+	if len(cfg.AllowHosts) != 56 {
 		t.Errorf("allowHosts = %v", cfg.AllowHosts)
 	}
 	if cfg.WebDir2 != "../webui/dist" {

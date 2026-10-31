@@ -4,6 +4,7 @@ import 'package:pica_comic/comic_source/comic_source.dart';
 import 'package:pica_comic/components/components.dart';
 import 'package:pica_comic/pages/main_page.dart';
 import 'package:pica_comic/foundation/app.dart';
+import 'package:pica_comic/foundation/log.dart';
 import 'package:pica_comic/tools/translations.dart';
 import 'settings/settings_page.dart';
 
@@ -21,6 +22,8 @@ class _WelcomePageState extends State<WelcomePage> {
   var controller = PageController();
 
   int page = 0;
+
+  bool finishing = false;
 
   @override
   Widget build(BuildContext context) {
@@ -70,6 +73,23 @@ class _WelcomePageState extends State<WelcomePage> {
     controller.animateToPage((controller.page! - 1).round(),
         duration: const Duration(milliseconds: 200), curve: Curves.ease);
   }
+
+  /// 完成引导。
+  ///
+  /// 重新加载漫画源需要清空并重建 ComicSource.sources；重复点击会让多个
+  /// reload 并发执行，可能留下空的/半初始化的源列表（随后搜索页因找不到
+  /// 源而无法构建）。这里加锁并给出加载态。
+  Future<void> finish() async {
+    if (finishing) return;
+    setState(() => finishing = true);
+    try {
+      await ComicSource.reload();
+    } catch (e, s) {
+      LogManager.addLog(LogLevel.error, "Welcome", "Reload sources failed\n$e\n$s");
+    }
+    if (!mounted) return;
+    context.to(() => const MainPage());
+  }
 }
 
 mixin class _WelcomePageComponents {
@@ -112,13 +132,9 @@ mixin class _WelcomePageComponents {
         else
           Button.filled(
               padding: const EdgeInsets.fromLTRB(24, 6, 12, 6),
-              onPressed: () async {
-                await ComicSource.reload();
-                if (context.mounted) {
-                  context.to(() => const MainPage());
-                }
-              },
-              disabled: !canNext,
+              isLoading: state.finishing,
+              onPressed: state.finishing ? () {} : state.finish,
+              disabled: !canNext || state.finishing,
               child: Row(
                 children: [
                   Text("完成".tl),

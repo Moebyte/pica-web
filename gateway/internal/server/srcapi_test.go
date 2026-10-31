@@ -2,20 +2,29 @@ package server
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/jpeg"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"picagateway/internal/config"
+	"picagateway/internal/downloads"
 	"picagateway/internal/imgproxy"
 	"picagateway/internal/jmimage"
+	"picagateway/internal/srcapi"
 )
 
 func TestSrcAPISources(t *testing.T) {
@@ -234,10 +243,17 @@ func TestImageJMRecombine(t *testing.T) {
 	}
 }
 
-// TestImageJMPassthroughNonJPEG checks webp payloads with jm params are served
-// unchanged (JM now ships webp for most albums; recombine never applies).
-func TestImageJMPassthroughNonJPEG(t *testing.T) {
-	webp := []byte("RIFF....WEBPvp8 fake payload")
+// TestImageJMRecombinesWebP checks WebP payloads with jm params are
+// recombined too. JM serves most pages as WebP and those files are scrambled
+// exactly like the JPEGs (verified against live chapters), so passing them
+// through unchanged would show broken pages on /v2. The fixture is a
+// lossless 8x24 WebP holding 12 solid gray stripes in reverse order.
+func TestImageJMRecombinesWebP(t *testing.T) {
+	const scrambledWebP = "UklGRkYAAABXRUJQVlA4TDoAAAAvB8AFAF8gFkwkdudPGsMpPE7hMf/Z4YCQtp1MYQpTmEIKKaSQQgoppBDfdYjof34el8NmMRk0RRIA"
+	webp, err := base64.StdEncoding.DecodeString(scrambledWebP)
+	if err != nil {
+		t.Fatal(err)
+	}
 	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/webp")
 		_, _ = w.Write(webp)
@@ -245,25 +261,58 @@ func TestImageJMPassthroughNonJPEG(t *testing.T) {
 	t.Cleanup(imgSrv.Close)
 
 	e := newTestEnv(t, nil)
+	// eps 500000 + book 00001 -> 12 blocks of 2px each.
 	token, _ := e.srv.signer.SignPayload(imgproxy.Payload{
 		URL: imgSrv.URL + "/media/photos/500000/00001.webp",
 		JM:  &imgproxy.JMParams{EpsID: "500000", ScrambleID: "220980", BookID: "00001"},
 	}, time.Hour, time.Now())
-	resp, err := e.client.Get(e.gw.URL + "/api/img/" + token)
-	if err != nil {
-		t.Fatal(err)
+
+	fetch := func() (*http.Response, []byte) {
+		t.Helper()
+		resp, err := e.client.Get(e.gw.URL + "/api/img/" + token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp, raw
 	}
-	defer resp.Body.Close()
+
+	resp, body := fetch()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d", resp.StatusCode)
+		t.Fatalf("status = %d body=%q", resp.StatusCode, body)
 	}
-	if got := resp.Header.Get("Content-Type"); got != "image/webp" {
-		t.Fatalf("content type = %q", got)
+	if got := resp.Header.Get("Content-Type"); got != "image/jpeg" {
+		t.Fatalf("content type = %q, want image/jpeg", got)
 	}
-	var body bytes.Buffer
-	_, _ = body.ReadFrom(resp.Body)
-	if !bytes.Equal(body.Bytes(), webp) {
-		t.Fatal("webp payload was modified")
+	if !strings.HasPrefix(resp.Header.Get("Cache-Control"), "private, max-age=") {
+		t.Fatalf("cache-control = %q", resp.Header.Get("Cache-Control"))
+	}
+	img, err := jpeg.Decode(bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("decode recombined jpeg: %v", err)
+	}
+	if img.Bounds().Dx() != 8 || img.Bounds().Dy() != 24 {
+		t.Fatalf("bounds = %v, want 8x24", img.Bounds())
+	}
+	// Stripe i (2px) must carry gray value 30+i*20 in the original order.
+	for i := 0; i < 12; i++ {
+		want := uint8(30 + i*20)
+		r, g, b, _ := img.At(4, i*2+1).RGBA()
+		for _, got := range []uint8{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)} {
+			diff := int(got) - int(want)
+			if diff < -6 || diff > 6 {
+				t.Fatalf("stripe %d color = (%d,%d,%d), want %d", i, r>>8, g>>8, b>>8, want)
+			}
+		}
+	}
+
+	resp2, body2 := fetch()
+	if got := resp2.Header.Get("X-Cache"); got != "HIT" {
+		t.Fatalf("second X-Cache = %q", got)
+	}
+	if !bytes.Equal(body, body2) {
+		t.Fatal("cached recombined image differs")
 	}
 }
 
@@ -362,5 +411,250 @@ func TestV2StaticMissingBuild(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d", resp.StatusCode)
+	}
+}
+
+// ---- semantic-source download endpoint ----
+
+// fakeDownloadSource is a minimal Source+Downloader for the endpoint tests.
+type fakeDownloadSource struct {
+	key   string
+	comic srcapi.Comic
+	pages []downloads.Page
+	err   error
+
+	mu  sync.Mutex
+	eps []string
+}
+
+func (f *fakeDownloadSource) Key() string                   { return f.key }
+func (f *fakeDownloadSource) Name() string                  { return f.key }
+func (f *fakeDownloadSource) NeedLogin() bool               { return false }
+func (f *fakeDownloadSource) LoggedIn(context.Context) bool { return true }
+func (f *fakeDownloadSource) Tabs() []srcapi.Tab            { return nil }
+
+func (f *fakeDownloadSource) Explore(context.Context, string, int) (*srcapi.ListResult, error) {
+	return &srcapi.ListResult{}, nil
+}
+
+func (f *fakeDownloadSource) Search(context.Context, string, string, int) (*srcapi.ListResult, error) {
+	return &srcapi.ListResult{}, nil
+}
+
+func (f *fakeDownloadSource) Comic(context.Context, string) (*srcapi.Comic, error) {
+	comic := f.comic
+	return &comic, nil
+}
+
+func (f *fakeDownloadSource) Pages(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
+
+func (f *fakeDownloadSource) Login(context.Context, string, string) (*srcapi.LoginResult, error) {
+	return &srcapi.LoginResult{Name: "fake"}, nil
+}
+
+func (f *fakeDownloadSource) Logout(context.Context) error { return nil }
+
+func (f *fakeDownloadSource) DownloadPages(_ context.Context, comicID, ep string) ([]downloads.Page, error) {
+	f.mu.Lock()
+	f.eps = append(f.eps, ep)
+	f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.pages, nil
+}
+
+func (f *fakeDownloadSource) downloadedEps() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.eps...)
+}
+
+func TestSrcAPIDownloadEndpoint(t *testing.T) {
+	var hits atomic.Int64
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(pngBytes)
+	}))
+	t.Cleanup(imgSrv.Close)
+
+	fake := &fakeDownloadSource{
+		key: "jm",
+		comic: srcapi.Comic{
+			ComicBrief: srcapi.ComicBrief{ID: "42", Title: "Fake Comic"},
+			Chapters:   []srcapi.Chapter{{ID: "250000", Title: "第一話", Order: 1}},
+		},
+		pages: []downloads.Page{
+			{URL: imgSrv.URL + "/001.png", Headers: map[string]string{"Referer": "https://localhost/"},
+				JM: &downloads.JMInfo{EpsID: "250000", ScrambleID: "220980", BookID: "001"}},
+			{URL: imgSrv.URL + "/002.png"},
+		},
+	}
+	e := newTestEnvWith(t, nil, func(o *Options) { o.Sources = srcapi.NewRegistryFrom(fake) })
+
+	post := func(body string) (int, map[string]any) {
+		t.Helper()
+		resp, err := e.client.Post(e.gw.URL+"/api/src/jm/comic/42/download", "application/json",
+			bytes.NewReader([]byte(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var doc map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, doc
+	}
+	decodeView := func(doc map[string]any) downloads.JobView {
+		t.Helper()
+		raw, err := json.Marshal(doc["job"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var view downloads.JobView
+		if err := json.Unmarshal(raw, &view); err != nil {
+			t.Fatal(err)
+		}
+		return view
+	}
+
+	status, doc := post(`{}`)
+	if status != http.StatusOK || doc["ok"] != true || doc["existed"] != false {
+		t.Fatalf("submit = %d %+v", status, doc)
+	}
+	view := decodeView(doc)
+	if view.ID != "jm-42-250000" || view.Title != "Fake Comic" || view.Source != "jm" ||
+		view.ComicID != "42" || view.EP != "250000" || view.EPName != "第一話" ||
+		view.Dir != "jm/42/250000" || view.Total != 2 {
+		t.Fatalf("job view = %+v", view)
+	}
+	if eps := fake.downloadedEps(); len(eps) != 1 || eps[0] != "250000" {
+		t.Fatalf("DownloadPages eps = %v", eps)
+	}
+
+	// The job is persisted and visible through the downloads list API.
+	dlWaitFor(t, 5*time.Second, func() bool { return dlJob(t, e, "jm-42-250000").Status == "done" })
+	job := dlJob(t, e, "jm-42-250000")
+	if job.Done != 2 || job.Failed != 0 || job.Error != "" {
+		t.Fatalf("job = %+v", job)
+	}
+	if _, err := os.Stat(filepath.Join(e.cfg.DownloadsDir, "jm", "42", "250000", "job.json")); err != nil {
+		t.Fatalf("job.json: %v", err)
+	}
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("upstream hits = %d, want 2", got)
+	}
+
+	// Idempotent resubmission: 200 + existed, nothing re-downloaded.
+	status, doc = post(`{"ep":"250000","epName":"ignored"}`)
+	if status != http.StatusOK || doc["existed"] != true {
+		t.Fatalf("resubmit = %d %+v", status, doc)
+	}
+	view = decodeView(doc)
+	if view.Status != "done" || view.Done != 2 || view.EPName != "第一話" {
+		t.Fatalf("resubmit view = %+v", view)
+	}
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("upstream hits after resubmit = %d, want 2", got)
+	}
+}
+
+func TestSrcAPIDownloadSourceErrors(t *testing.T) {
+	comic := srcapi.Comic{
+		ComicBrief: srcapi.ComicBrief{ID: "c1", Title: "T"},
+		Chapters:   []srcapi.Chapter{{ID: "1", Title: "第1话", Order: 1}},
+	}
+	badEp := &fakeDownloadSource{
+		key: "picacg", comic: comic,
+		err: &srcapi.StatusError{Status: http.StatusBadRequest, Code: "invalid_ep", Message: "bad ep"},
+	}
+	upstream := &fakeDownloadSource{
+		key: "boom", comic: comic,
+		err: errors.New("connection reset"),
+	}
+	e := newTestEnvWith(t, nil, func(o *Options) {
+		o.Sources = srcapi.NewRegistryFrom(badEp, upstream)
+	})
+
+	post := func(path string) (int, string) {
+		t.Helper()
+		resp, err := e.client.Post(e.gw.URL+path, "application/json", bytes.NewReader([]byte(`{"ep":"x"}`)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var doc map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&doc)
+		code, _ := doc["code"].(string)
+		return resp.StatusCode, code
+	}
+
+	if status, code := post("/api/src/picacg/comic/c1/download"); status != http.StatusBadRequest || code != "invalid_ep" {
+		t.Fatalf("invalid ep = %d %q", status, code)
+	}
+	if status, code := post("/api/src/boom/comic/c1/download"); status != http.StatusBadGateway || code != srcapi.CodeUpstreamError {
+		t.Fatalf("upstream error = %d %q", status, code)
+	}
+	if jobs := dlList(t, e); len(jobs) != 0 {
+		t.Fatalf("failed submissions left jobs: %+v", jobs)
+	}
+}
+
+func TestSrcAPIDownloadPageLimit(t *testing.T) {
+	pages := make([]downloads.Page, downloads.MaxPages+1)
+	for i := range pages {
+		pages[i] = downloads.Page{URL: "https://example.com/001.jpg"}
+	}
+	fake := &fakeDownloadSource{
+		key: "jm",
+		comic: srcapi.Comic{
+			ComicBrief: srcapi.ComicBrief{ID: "c1", Title: "T"},
+			Chapters:   []srcapi.Chapter{{ID: "1", Title: "第1话", Order: 1}},
+		},
+		pages: pages,
+	}
+	e := newTestEnvWith(t, nil, func(o *Options) { o.Sources = srcapi.NewRegistryFrom(fake) })
+
+	resp, err := e.client.Post(e.gw.URL+"/api/src/jm/comic/c1/download", "application/json", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var doc map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&doc)
+	if resp.StatusCode != http.StatusBadRequest || doc["code"] != "invalid_job" {
+		t.Fatalf("page limit = %d %+v", resp.StatusCode, doc)
+	}
+}
+
+func TestSrcAPIDownloadAuthAndUnknownSource(t *testing.T) {
+	e := newTestEnv(t, nil)
+
+	post := func(path string) *http.Response {
+		t.Helper()
+		resp, err := e.client.Post(e.gw.URL+path, "application/json", bytes.NewReader([]byte(`{"ep":"1"}`)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp
+	}
+
+	if resp := post("/api/src/nope/comic/1/download"); resp.StatusCode != http.StatusNotFound ||
+		resp.Header.Get("X-Pica-Error") != "unknown_source" {
+		t.Fatalf("unknown source = %d %q", resp.StatusCode, resp.Header.Get("X-Pica-Error"))
+	}
+	// The real picacg source implements Downloader but needs credentials.
+	if resp := post("/api/src/picacg/comic/c1/download"); resp.StatusCode != http.StatusUnauthorized ||
+		resp.Header.Get("X-Pica-Error") != "login_required" {
+		t.Fatalf("picacg without creds = %d %q", resp.StatusCode, resp.Header.Get("X-Pica-Error"))
+	}
+	if jobs := dlList(t, e); len(jobs) != 0 {
+		t.Fatalf("unauthorized submission left jobs: %+v", jobs)
 	}
 }

@@ -59,6 +59,34 @@ class _ImageFavoritesPageState extends State<ImageFavoritesPage> {
   Widget buildPage() {
     var images = ImageFavoriteManager.getAll();
 
+    if (images.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.image_outlined,
+              size: 64,
+              color: Theme.of(context).colorScheme.outline,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              "暂无图片收藏".tl,
+              style: TextStyle(color: Theme.of(context).colorScheme.outline),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              "阅读时收藏的图片会显示在这里".tl,
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.outline,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return GridView.builder(
       gridDelegate: SliverGridDelegateWithComics(true, appdata.settings[74]),
       itemCount: images.length,

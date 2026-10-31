@@ -6,6 +6,7 @@ class NetworkError extends StatelessWidget {
     required this.message,
     this.retry,
     this.withAppbar = true,
+    this.extraAction,
   });
 
   final String message;
@@ -13,6 +14,9 @@ class NetworkError extends StatelessWidget {
   final void Function()? retry;
 
   final bool withAppbar;
+
+  /// 可选附加操作（例如“未登录”时提供前往登录的按钮）。
+  final Widget? extraAction;
 
   @override
   Widget build(BuildContext context) {
@@ -44,7 +48,11 @@ class NetworkError extends StatelessWidget {
                 child: Text('继续'.tl),
               )
             else
-              FilledButton(onPressed: retry, child: Text('重试'.tl))
+              FilledButton(onPressed: retry, child: Text('重试'.tl)),
+          if (extraAction != null) ...[
+            const SizedBox(height: 8),
+            extraAction!,
+          ]
         ],
       ),
     );
@@ -107,6 +115,7 @@ abstract class LoadingState<T extends StatefulWidget, S extends Object>
       error = null;
     });
     loadData().then((value) {
+      if (!mounted) return;
       if (value.success) {
         setState(() {
           isLoading = false;
@@ -146,6 +155,7 @@ abstract class LoadingState<T extends StatefulWidget, S extends Object>
     isLoading = true;
     Future.microtask(() {
       loadData().then((value) {
+        if (!mounted) return;
         if (value.success) {
           setState(() {
             isLoading = false;

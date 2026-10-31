@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useAppStore } from '@/stores/app'
 import { NAV_ITEMS } from '@/components/nav'
+import ToastHost from '@/components/ToastHost.vue'
 
 const app = useAppStore()
 const { sources, currentSrc, sourcesLoaded, sourcesError, currentSource } = storeToRefs(app)
@@ -108,6 +109,8 @@ const needLogin = computed(() => currentSource.value?.needLogin === true && !cur
       </RouterLink>
     </nav>
   </div>
+
+  <ToastHost />
 </template>
 
 <style scoped>

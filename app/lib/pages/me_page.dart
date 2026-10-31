@@ -19,78 +19,85 @@ class MePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox.expand(
-      child: LayoutBuilder(
-        builder: (context, constrains) {
-          final width = constrains.maxWidth;
-          bool shouldShowTwoPanel = width > 600;
-          return SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Column(
-              children: [
-                const SizedBox(
-                  height: 12,
-                ),
-                buildHistory(context),
-                if (shouldShowTwoPanel)
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          children: [
-                            const SizedBox(
-                              height: 12,
-                            ),
-                            buildAccount(width),
-                            const SizedBox(
-                              height: 12,
-                            ),
-                            buildDownload(context, width),
-                          ],
+    // “历史记录”和“图片收藏”的数量依赖 HistoryManager/ImageFavoriteManager
+    // 的变更通知（tag: me_page）。之前没有注册对应的 controller，导致从
+    // 阅读器/图片收藏页返回后数字仍是旧值。
+    return StateBuilder<SimpleController>(
+      tag: "me_page",
+      init: SimpleController(),
+      builder: (controller) => SizedBox.expand(
+        child: LayoutBuilder(
+          builder: (context, constrains) {
+            final width = constrains.maxWidth;
+            bool shouldShowTwoPanel = width > 600;
+            return SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Column(
+                children: [
+                  const SizedBox(
+                    height: 12,
+                  ),
+                  buildHistory(context),
+                  if (shouldShowTwoPanel)
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            children: [
+                              const SizedBox(
+                                height: 12,
+                              ),
+                              buildAccount(width),
+                              const SizedBox(
+                                height: 12,
+                              ),
+                              buildDownload(context, width),
+                            ],
+                          ),
                         ),
-                      ),
-                      const SizedBox(
-                        width: 12,
-                      ),
-                      Expanded(
-                        child: Column(
-                          children: [
-                            const SizedBox(
-                              height: 12,
-                            ),
-                            buildImageFavorite(context, width),
-                            const SizedBox(
-                              height: 12,
-                            ),
-                            buildTools(width),
-                          ],
+                        const SizedBox(
+                          width: 12,
                         ),
-                      ),
-                    ],
-                  )
-                else ...[
-                  const SizedBox(
-                    height: 12,
-                  ),
-                  buildAccount(width),
-                  const SizedBox(
-                    height: 12,
-                  ),
-                  buildDownload(context, width),
-                  const SizedBox(
-                    height: 12,
-                  ),
-                  buildImageFavorite(context, width),
-                  const SizedBox(
-                    height: 12,
-                  ),
-                  buildTools(width),
+                        Expanded(
+                          child: Column(
+                            children: [
+                              const SizedBox(
+                                height: 12,
+                              ),
+                              buildImageFavorite(context, width),
+                              const SizedBox(
+                                height: 12,
+                              ),
+                              buildTools(width),
+                            ],
+                          ),
+                        ),
+                      ],
+                    )
+                  else ...[
+                    const SizedBox(
+                      height: 12,
+                    ),
+                    buildAccount(width),
+                    const SizedBox(
+                      height: 12,
+                    ),
+                    buildDownload(context, width),
+                    const SizedBox(
+                      height: 12,
+                    ),
+                    buildImageFavorite(context, width),
+                    const SizedBox(
+                      height: 12,
+                    ),
+                    buildTools(width),
+                  ],
                 ],
-              ],
-            ),
-          );
-        },
+              ),
+            );
+          },
+        ),
       ),
     );
   }

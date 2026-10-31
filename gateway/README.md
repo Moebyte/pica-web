@@ -221,12 +221,22 @@ PY
 
 ### 图片代理
 
-先签发 token（需要登录）：
+先签发 token（需要登录）。推荐用 POST 把源站需要的请求头一并签名，浏览器随后只要普通 GET：
+
+```bash
+curl -s -b /tmp/pica.cookies -H 'Content-Type: application/json' \
+  -d '{"url":"https://cdn.example.com/secret.webp",
+       "headers":{"Referer":"https://example.com/","User-Agent":"Dalvik/2.1.0"},
+       "ttl":86400}' \
+  http://127.0.0.1:18081/api/img/sign
+# {"ok":true,"token":"...","url":"/api/img/...","expiresAt":"..."}
+```
+
+兼容旧的 GET 形式（仅 `url` + `profile`）：
 
 ```bash
 curl -s -b /tmp/pica.cookies \
   'http://127.0.0.1:18081/api/img/sign?url=https%3A%2F%2Fexample.com%2Fcover.png&profile=ehentai&ttl=3600'
-# {"ok":true,"token":"...","url":"/api/img/...","expiresAt":"..."}
 ```
 
 再取图（token 是 `/api/img/{token}` 的路径段）：
@@ -240,9 +250,12 @@ curl -s -b /tmp/pica.cookies -H 'Range: bytes=0-1023' \
   -o /tmp/part.bin 'http://127.0.0.1:18081/api/img/<token>'
 ```
 
-- token = `base64url(payload) + "." + base64url(HMAC-SHA256)`，payload 含 `url`、可选 `profile`、`exp`。
+- token = `base64url(payload) + "." + base64url(HMAC-SHA256)`，payload 含 `url`、可选 `profile`、可选 `headers`、可选 `jm`、`exp`。
+- `exp` 对齐到固定窗口（默认 24h TTL → 下一个 UTC 零点 + 2h 宽限，1h TTL → 下一个整点 + 2h），因此同一 `(url, headers, profile, jm)` 在同一窗口内签名结果逐字节相同，浏览器缓存才能真正命中。
+- `headers` 会过滤 Host/Content-Length/Cookie/Accept-Encoding/Connection 等 hop-by-hop 头以及 `X-*`/`Proxy-*`/`Sec-*`；Cookie 由网关 Cookie Vault 注入，不进入 token。
 - 仅允许 GET；签名无效/过期返回 403 JSON。
-- 只缓存 `image/*`（且无 `Content-Encoding`、非 Range 请求）；磁盘按 `sha256(url)` 内容寻址。
+- 成功响应带 `Cache-Control: private, max-age=<token 剩余有效期，上限 86400>`；`private` 防止共享缓存串号。
+- 只缓存 `image/*`（且无 `Content-Encoding`、非 Range 请求）；磁盘键为 `sha256(url + profile + headers 指纹 + jm)`，不同请求头/不同 profile 不会串用缓存。
 - 缓存 TTL + LRU 淘汰由 `cacheTTL` / `cacheMaxMB` 控制；命中返回 `X-Cache: HIT`，未命中 `MISS`，Range/非图片 `BYPASS`。
 - SVG 或非图片响应附加 `Content-Security-Policy: sandbox`，避免同源直开执行脚本。
 
@@ -329,7 +342,7 @@ curl -s -b /tmp/pica.cookies -H 'Range: bytes=0-1023' \
 - `epsId < scrambleId` → 0（不乱序）；`epsId < 268850` → 10；
 - `epsId > 421926` → `md5(epsId+bookId)` 末字符 `%8*2+2`；否则 `%10*2+2`（`bookId` = 图片文件名去扩展名，如 `00001`）。
 
-`num>1` 时把 JPEG 纵向均分 `num` 块（余数归最后一块）逆序重排后以质量 85 重新编码；`num<=1` 原样保存；webp/png 等非 JPEG 不做重排，原样保存并记 warning（`_getSegmentationNum`/`_segmentationPicture` 从 Dart `image_recombine.dart` 移植）。
+`num>1` 时把图片纵向均分 `num` 块（余数归最后一块）逆序重排后以质量 85 重新编码为 JPEG；`num<=1` 原样保存。JPEG 与 WebP 都会还原（实测 JM 现役 WebP 与 JPEG 一样做了分块乱序；WebP 用 `golang.org/x/image/webp` 解码，因无纯 Go WebP 编码器，输出统一为 JPEG），png/gif 等其他格式原样保存并记 warning（`_getSegmentationNum`/`_segmentationPicture` 从 Dart `image_recombine.dart` 移植）。
 
 ### 语义源 API（Semantic source API）
 
@@ -343,10 +356,13 @@ curl -s -b /tmp/pica.cookies -H 'Range: bytes=0-1023' \
 | `GET /api/src/{src}/search?q=&page=N` | 搜索（jm 另支持 `sort=mr/mv/mp/mfm/tp`，默认 mr） |
 | `GET /api/src/{src}/comic/{id}` | 详情 → `{comic:Comic}`（含 chapters/tags 分组） |
 | `GET /api/src/{src}/comic/{id}/pages?ep=<chapterId>` | 章节图片 → `{pages:["/api/img/<token>",...]}` |
+| `POST /api/src/{src}/comic/{id}/download` | body `{"ep":"<章节id，可空>","epName":"<可空>"}` → 解析原始上游页并提交服务端下载任务；响应 `{ok,job,existed}` |
 | `POST /api/src/{src}/login` | body `{"username","password"}`；jm 固定 400 `not_supported` |
 | `POST /api/src/{src}/logout` | picacg 清除凭据；jm no-op |
 
 `ComicBrief` = `{id,title,subtitle,author,cover,pageCount,chapters,tags}`；`Comic` 在此之上增加 `favorites`、`uploadDate`（unix 秒）、`tags`（源原生分组：jm 为 作者/作品/登场人物/标签，picacg 为 分类/标签）、`chapters:[{id,title,order}]`、`thumbs`（当前两源均为空数组）。封面/正文图一律返回**服务端签名好的 `/api/img/<token>` 相对 URL**，`<img>` 直接可用，命中 imgproxy 磁盘缓存。
+
+**服务端下载端点**：`POST /api/src/{src}/comic/{id}/download` 让服务端直接解析章节页面并入队下载，浏览器无需接触源站图片 URL/请求头。`ep` 为空时取 `Comic().chapters[0].id`；`epName` 为空时取对应章节标题。任务 ID 为 `<src>-<id>-<ep>`（无章节列表的单章源用 `all`），目录为 `downloads/<src>/<id>/<ep>/`。返回 `{"ok":true,"job":{JobView},"existed":false}`；同 ID 已入队/运行/完成时幂等返回现有任务并置 `existed:true`。错误：未知源 404 `unknown_source`、picacg 未登录 401 `login_required`、ep 非法 400、上游失败 502；页数/URL 等沿用 `internal/downloads` 的校验（`MaxPages` 等，超限 400 `invalid_job`）。jm 返回直链 + `jm` 图片请求头 + `{epsId,scrambleId,bookId}` 重排参数（任务完成时对 JPEG/WebP 做分块还原，WebP 输出为 JPEG），picacg 返回静态图直链、无额外请求头。源通过可选接口 `srcapi.Downloader` 提供该能力（不实现时端点返回 404 `download_not_supported`）。
 
 **JM（禁漫天堂）认证说明**：jm v1 API 免登录可浏览，因此 `login` 端点返回 400。请求头（`token=md5(time+"18comicAPPContent")`、`tokenparam="time,2.0.11"` 等）与响应 AES-256-ECB 解密从 Dart `jm_network` 原样移植。API 线路从加密服务器列表（`*.bytepluses.com`）获取：取线路 → 内存缓存 → 全线失败时重取，多线路任选可用者（出厂域名表已整体失效）。图片 CDN 从 `/setting` 的 `img_host` 刷新（每小时一次，默认 `cdn-msp.jmapiproxy3.cc`）。`pages` 端点签发的 token 带 `jm:{epsId,scrambleId,bookId}`，`/api/img/<token>` 缓存 MISS 时对 JPEG 做 `jmimage.Recombine` 分块还原后再缓存返回；webp（JM 目前大部分图源已是 webp）原样返回并记 warning。
 
@@ -368,6 +384,11 @@ curl -s -b /tmp/pica.cookies 'http://127.0.0.1:18081/api/src/jm/comic/1487029/pa
 # JM 搜索（可选排序 mr/mv/mp/mfm/tp）
 curl -s -b /tmp/pica.cookies 'http://127.0.0.1:18081/api/src/jm/search?q=%E6%9D%B1%E6%96%B9&sort=mr&page=1'
 
+# 直接提交服务端下载（ep 可空，默认第一章；任务可在 /api/downloads/jobs 查看）
+curl -s -b /tmp/pica.cookies -H 'Content-Type: application/json' \
+  -d '{"ep":"1487029","epName":"第1話"}' \
+  http://127.0.0.1:18081/api/src/jm/comic/1487029/download
+
 # PicACG 登录 / 登出 / 推荐
 curl -s -b /tmp/pica.cookies -H 'Content-Type: application/json' \
   -d '{"username":"you@example.com","password":"…"}' http://127.0.0.1:18081/api/src/picacg/login
@@ -377,7 +398,7 @@ curl -s -b /tmp/pica.cookies -X POST http://127.0.0.1:18081/api/src/picacg/logou
 
 出站全部走 `policy.ValidateURL` + 共享受控 Transport（域名校验照旧，需在 `allowHosts` 放行源站域名，见 `config.example.json`）；上游非 2xx 记 `src upstream status` 日志（4xx Info / 5xx Warn，带 target）。JM 图片 token 使用内置 `jm` header profile（`Referer: https://localhost/` 等，启动时自动注册，可在 config 覆盖）。
 
-新增源只需实现 `srcapi.Source` 接口并在 `NewRegistry` 注册，HTTP 层不用动。
+新增源只需实现 `srcapi.Source` 接口并在 `NewRegistry` 注册，HTTP 层不用动；若要支持 `POST /api/src/{src}/comic/{id}/download`，再实现可选的 `srcapi.Downloader`（`DownloadPages` 返回未签名的上游页规格）。
 
 ### Cookie 查看 / 清除
 
@@ -469,7 +490,7 @@ Map<String, dynamic>? decodePicaMeta(String? value) {
 - `X-Pica-Follow` 与 Dio 的 `followRedirects` 对齐；不跟随时从 `X-Pica-Meta.status` 和 `X-Pica-Meta.headers.Location` 读取真实 3xx，隧道 HTTP 状态固定为 200（防止浏览器自动跟随），拿到后再次经隧道请求（网关会复验 SSRF）。
 - 浏览器的 `Cookie` / `User-Agent` / `Referer` / `Origin` 不要直接放在 fetch 头里；统一放进 `X-Pica-Req-Headers`，否则会被忽略。
 - 不要把 `X-Pica-Meta` 当成 body；body 始终是上游内容。
-- 图片：调 `/api/img/sign` 拿签名 URL，再让浏览器加载（同源会自动带会话 cookie）；或继续走隧道。
+- 图片：调 `POST /api/img/sign`（body 带 `url`、可选 `headers`/`profile`/`jm`/`ttl`）拿签名 URL，再用普通 GET 加载（同源自动带会话 cookie，响应可被浏览器缓存；同一图片在 token 窗口内 URL 稳定）；签名不可用时可回退隧道。
 - 401 表示会话失效，应跳登录；403 `target_blocked` 表示目标不在白名单或被 SSRF 拦截；413 请求体超限；429 需要退避重试；502 上游网络错误。
 - 网关自身产生的错误带 `X-Pica-Error` 响应头（值为错误码）和 JSON body，可与上游透传的同状态码响应区分。
 - 部署要求同源（Flutter Web 与网关同一域名）。跨源 `flutter run` 开发服务器不在本阶段支持范围内（未实现 CORS 凭据）。
@@ -523,17 +544,17 @@ location / {
 ## 已知限制
 
 - 传输层之外已有语义源 API（`/api/src/*`，仅 jm/picacg）；没有 Cloudflare 挑战求解（FlareSolverr 等）。
-- 服务端下载：单实例内固定 2 并发 job（不可配）；`job.json` 与页面文件同目录，多进程同时写同一 `downloadsDir` 不受支持；JM 还原会对 JPEG 有一次质量 85 的重编码（有轻微代际损失）；JM 的 webp/png 不还原（原样保存）；取消的任务重启后不会自动恢复（已从列表移除）；`file` 接口可读取目录内的任意文件（包括 `job.json`，属预期行为）。
+- 服务端下载：单实例内固定 2 并发 job（不可配）；`job.json` 与页面文件同目录，多进程同时写同一 `downloadsDir` 不受支持；JM 还原会对 JPEG/WebP 有一次质量 85 的 JPEG 重编码（有轻微代际损失，WebP 输出为 JPEG）；png/gif 等不还原（原样保存）；取消的任务重启后不会自动恢复（已从列表移除）；`file` 接口可读取目录内的任意文件（包括 `job.json`，属预期行为）。
 - 不支持 WebSocket / 101 Upgrade；`Upgrade` 头会被剥离。
 - 请求体在内存中缓冲（≤8 MiB）以支持 307/308 重放；不是流式上传。
 - 上游响应超过 `maxRespMB` 且没有 Content-Length 时，已发出的头部无法撤回，客户端只会收到截断的 body（日志告警）。
 - 原始隧道请求的 `Referer` / `Origin` / `User-Agent` / `Cookie` 不透传（避免浏览器自动带上网关来源）；需要时通过 `X-Pica-Req-Headers` 提供，图片防盗链用 `headerProfiles`。
-- 图片缓存键为 `sha256(url)`（同一 URL 不同 profile 共享缓存）；带 `jm` 参数的 token 使用独立键空间（缓存的是重排后的字节）。
-- 语义源 API：jm `/latest` 无总页数，`maxPage` 采用"有内容即 page+1"的启发式；jm/picacg 的 `thumbs` 均为空数组（两源 API 均不提供缩略图，Flutter 端同样没有）；JM 现役图源基本为 webp，重排路径仅对 JPEG 生效（webp 原样返回 + warning）；picacg 凭据以可逆加密存于本机 vault，注意保管 dataDir。
+- 图片缓存键为 `sha256(url + profile + headers 指纹 + jm)`；带 `jm` 参数的 token 使用独立键空间（缓存的是重排后的字节）。
+- 语义源 API：jm `/latest` 无总页数，`maxPage` 采用"有内容即 page+1"的启发式；jm/picacg 的 `thumbs` 均为空数组（两源 API 均不提供缩略图，Flutter 端同样没有）；JM 现役图源基本为 webp，重排路径对 JPEG 与 WebP 都生效（WebP 输出为 JPEG，首屏体积比原始 WebP 大约 60%，换来浏览器/磁盘缓存命中后 0 传输）；picacg 凭据以可逆加密存于本机 vault，注意保管 dataDir。
 - 单实例、单租户；SQLite 不适合多进程同时写。
 - 会话是无状态 HMAC cookie，登出只清浏览器 cookie；已签发的 token 在 24h 内理论上仍有效（没有服务端吊销表）。
 - 静态文件未做 gzip/br（交给 nginx）。
-- 图片签名接口是本实现补充的端点（`GET /api/img/sign`），否则客户端无法自行生成 token。
+- 图片签名接口是本实现补充的端点（`GET/POST /api/img/sign`），否则客户端无法自行生成 token。
 
 ## 验收验证
 

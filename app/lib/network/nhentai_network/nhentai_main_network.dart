@@ -75,7 +75,7 @@ class NhentaiNetwork {
         var path = res.headers["Location"]?.first ??
             res.headers["location"]?.first ??
             "";
-        return get(Uri.parse(url).replace(path: path).toString());
+        return await get(Uri.parse(url).replace(path: path).toString());
       }
       return Res(res.data);
     } catch (e) {

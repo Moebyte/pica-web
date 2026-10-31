@@ -59,7 +59,9 @@
     "cdnntr.cc",
     "*.cdnntr.cc",
     "jmdanjonproxy.vip",
-    "*.jmdanjonproxy.vip"
+    "*.jmdanjonproxy.vip",
+    "jmdanjonproxy.xyz",
+    "*.jmdanjonproxy.xyz"
   ],
   "allowAll": false,
   "hostOverrides": {},

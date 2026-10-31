@@ -2,9 +2,14 @@
 // to its chapter images.
 //
 // Ported from the Dart client (app/lib/foundation/image_loader/image_recombine.dart,
-// originally from JMComic-qt tools): the served JPEG is cut into num equal
+// originally from JMComic-qt tools): the served image is cut into num equal
 // vertical blocks (the remainder goes to the last block) and the blocks are
 // stacked back in reverse order.
+//
+// JM now serves most pages as WebP. Those WebP files are scrambled exactly
+// like the older JPEGs (verified against live chapters), so the gateway must
+// recombine both formats. A pure-Go WebP encoder is not available, so WebP
+// pages are decoded and re-encoded as JPEG.
 package jmimage
 
 import (
@@ -17,6 +22,8 @@ import (
 	"image/jpeg"
 	"strconv"
 	"strings"
+
+	"golang.org/x/image/webp"
 )
 
 // SegmentationNum returns the number of vertical blocks JM used to scramble
@@ -53,23 +60,23 @@ func hashSegments(epsID int, bookName string, mod int) int {
 // EncodeQuality is the JPEG quality used for re-encoded images.
 const EncodeQuality = 85
 
-// Recombine reverses the scramble of a JM JPEG. num <= 1 returns the input
-// unchanged. The image is decoded, split into num vertical SubImages (the
-// remainder belongs to the last block) which are redrawn in reverse order onto
-// a fresh canvas and re-encoded as JPEG (quality 85).
+// Recombine reverses the scramble of a JM page image. num <= 1 returns the
+// input unchanged. JPEG input is re-encoded as JPEG; WebP input is decoded
+// and encoded as JPEG (quality EncodeQuality). Any other payload yields an
+// error.
 func Recombine(imgData []byte, num int) ([]byte, error) {
 	if num <= 1 {
 		return imgData, nil
 	}
-	src, err := jpeg.Decode(bytes.NewReader(imgData))
+	src, err := decode(imgData)
 	if err != nil {
-		return nil, fmt.Errorf("decode jpeg: %w", err)
+		return nil, err
 	}
 	sub, ok := src.(interface {
 		SubImage(r image.Rectangle) image.Image
 	})
 	if !ok {
-		return nil, fmt.Errorf("jpeg decoder produced %T, cannot slice", src)
+		return nil, fmt.Errorf("decoder produced %T, cannot slice", src)
 	}
 
 	b := src.Bounds()
@@ -101,12 +108,52 @@ func Recombine(imgData []byte, num int) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
+// decode sniffs the payload magic and decodes JM's two live formats.
+func decode(imgData []byte) (image.Image, error) {
+	switch {
+	case IsWebPBytes(imgData):
+		src, err := webp.Decode(bytes.NewReader(imgData))
+		if err != nil {
+			return nil, fmt.Errorf("decode webp: %w", err)
+		}
+		return src, nil
+	case IsJPEGBytes(imgData):
+		src, err := jpeg.Decode(bytes.NewReader(imgData))
+		if err != nil {
+			return nil, fmt.Errorf("decode jpeg: %w", err)
+		}
+		return src, nil
+	default:
+		return nil, fmt.Errorf("unsupported image format")
+	}
+}
+
 // IsJPEG reports whether the content type / URL extension pair looks like a
-// JPEG (the only format JM scrambling applies to).
+// JPEG.
 func IsJPEG(ext, contentType string) bool {
 	switch ext {
 	case "jpg", "jpeg":
 		return true
 	}
 	return strings.Contains(contentType, "jpeg")
+}
+
+// IsJPEGBytes reports whether data starts with a JPEG SOI marker.
+func IsJPEGBytes(data []byte) bool {
+	return len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff
+}
+
+// IsWebP reports whether the content type / URL extension pair looks like a
+// WebP image.
+func IsWebP(ext, contentType string) bool {
+	switch ext {
+	case "webp":
+		return true
+	}
+	return strings.Contains(contentType, "webp")
+}
+
+// IsWebPBytes reports whether data starts with a RIFF/WEBP header.
+func IsWebPBytes(data []byte) bool {
+	return len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP"
 }
