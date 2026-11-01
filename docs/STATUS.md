@@ -474,3 +474,27 @@ GatewaySync 扩展为多键：`account` / `history` / `favorites`（均为网关
 
 **验证环境**：`https://picacg.example.com`，Chromium 移动视口 390×844，
 真实 picacg/JM 账号。阅读器批量签名测试使用 JM 65 页章节。
+
+### 12.10 历史/收藏封面持久化修复（2026-11-01）
+
+**现象**：首页历史轮播偶尔有一张封面显示为「!」（加载失败），控制台有两条 403。
+
+**根因**：历史表里混入了一条封面为 `/api/img/<token>` 的**签名图片 URL**。
+签名 token 内含过期时间，存进数据库后永远不会刷新；token 到期后浏览器仍请求
+同一 URL，网关按设计返回 403。正常阅读链路存的是源站原始 URL（展示时再按需签名/走隧道），
+这条是早期联调注入的旧数据，但“把会过期的 URL 持久化”本身需要防御。
+
+**修复**：新增 `lib/foundation/image_url.dart` 的 `stableImageUrl()`：
+识别 `/api/img/<token>`（相对或同源绝对地址），从 token 的 payload 中取出原始上游 URL；
+无法解析时原样保留。应用在以下位置统一归一化：
+
+- `History.fromModel/fromMap/fromRow`：内存中的历史封面一律是原始 URL；
+- `HistoryManager.exportRows/importRows`：服务端同步上传/下载都不再传播签名 URL；
+- `ImageFavoriteManager.add/getAll`：收藏的图片同样处理。
+
+**验证**：
+
+- 单元测试 `test/foundation/image_url_test.dart` 覆盖相对/绝对/畸形 token（全绿）；
+- 生产首页：历史 8 条封面全部 200，破图消失，无 403；
+- 从历史进入阅读 → 返回 → 触发同步，服务端 blob 的 8 条封面均为原始 URL；
+- 阅读器、账号恢复、批量签名等既有功能无回归。

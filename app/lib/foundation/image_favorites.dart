@@ -2,7 +2,7 @@ part of "history.dart";
 
 // 直接用history.db了, 没必要再加一个favorites.db
 
-class ImageFavorite{
+class ImageFavorite {
   /// unique id for the comic
   final String id;
 
@@ -16,14 +16,15 @@ class ImageFavorite{
 
   final Map<String, dynamic> otherInfo;
 
-  const ImageFavorite(this.id, this.imagePath, this.title, this.ep, this.page, this.otherInfo);
+  const ImageFavorite(
+      this.id, this.imagePath, this.title, this.ep, this.page, this.otherInfo);
 }
 
-class ImageFavoriteManager{
+class ImageFavoriteManager {
   static Database get _db => HistoryManager()._db;
 
   /// 检查表image_favorites是否存在, 不存在则创建
-  static void init(){
+  static void init() {
     _db.execute("CREATE TABLE IF NOT EXISTS image_favorites ("
         "id TEXT,"
         "title TEXT NOT NULL,"
@@ -35,28 +36,44 @@ class ImageFavoriteManager{
         ");");
   }
 
-  static void add(ImageFavorite favorite){
+  static void add(ImageFavorite favorite) {
     _db.execute("""
       insert into image_favorites(id, title, cover, ep, page, other)
       values(?, ?, ?, ?, ?, ?);
-    """, [favorite.id, favorite.title, favorite.imagePath, favorite.ep, favorite.page, jsonEncode(favorite.otherInfo)]);
+    """, [
+      favorite.id,
+      favorite.title,
+      stableImageUrl(favorite.imagePath),
+      favorite.ep,
+      favorite.page,
+      jsonEncode(favorite.otherInfo)
+    ]);
     Webdav.uploadData();
-    Future.microtask(() => StateController.findOrNull(tag: "me_page")?.update());
+    Future.microtask(
+        () => StateController.findOrNull(tag: "me_page")?.update());
   }
 
-  static List<ImageFavorite> getAll(){
+  static List<ImageFavorite> getAll() {
     var res = _db.select("select * from image_favorites;");
-    return res.map((e) =>
-        ImageFavorite(e["id"], e["cover"], e["title"], e["ep"], e["page"], jsonDecode(e["other"]))).toList();
+    return res
+        .map((e) => ImageFavorite(
+            e["id"],
+            stableImageUrl(e["cover"]?.toString() ?? ''),
+            e["title"],
+            e["ep"],
+            e["page"],
+            jsonDecode(e["other"])))
+        .toList();
   }
 
-  static void delete(ImageFavorite favorite){
+  static void delete(ImageFavorite favorite) {
     _db.execute("""
       delete from image_favorites
       where id = ? and ep = ? and page = ?;
     """, [favorite.id, favorite.ep, favorite.page]);
     Webdav.uploadData();
-    Future.microtask(() => StateController.findOrNull(tag: "me_page")?.update());
+    Future.microtask(
+        () => StateController.findOrNull(tag: "me_page")?.update());
   }
 
   static bool exist(String id, int ep, int page) {

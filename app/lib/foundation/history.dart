@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:pica_comic/comic_source/comic_source.dart';
 import 'package:pica_comic/foundation/app.dart';
+import 'package:pica_comic/foundation/image_url.dart';
 import 'package:pica_comic/foundation/log.dart';
 import 'package:pica_comic/network/webdav.dart';
 import 'package:pica_comic/web_compat/sqlite.dart';
@@ -101,7 +102,7 @@ base class History extends LinkedListEntry<History> {
       : type = model.historyType,
         title = model.title,
         subtitle = model.subTitle ?? '',
-        cover = model.cover,
+        cover = stableImageUrl(model.cover),
         target = model.target,
         time = time ?? DateTime.now();
 
@@ -123,7 +124,7 @@ base class History extends LinkedListEntry<History> {
         time = DateTime.fromMillisecondsSinceEpoch(map["time"]),
         title = map["title"],
         subtitle = map["subtitle"],
-        cover = map["cover"],
+        cover = stableImageUrl(map["cover"] ?? ''),
         ep = map["ep"],
         page = map["page"],
         target = map["target"],
@@ -141,7 +142,7 @@ base class History extends LinkedListEntry<History> {
         time = DateTime.fromMillisecondsSinceEpoch(row["time"]),
         title = row["title"],
         subtitle = row["subtitle"],
-        cover = row["cover"],
+        cover = stableImageUrl(row["cover"] ?? ''),
         ep = row["ep"],
         page = row["page"],
         target = row["target"],
@@ -225,8 +226,10 @@ class HistoryManager {
       skips = 0;
       ImageFavoriteManager.init();
       var newImages0 = db.select("select * from image_favorites;");
-      var newImages = newImages0.map((e) =>
-          ImageFavorite(e["id"], e["cover"], e["title"], e["ep"], e["page"], jsonDecode(e["other"]))).toList();
+      var newImages = newImages0
+          .map((e) => ImageFavorite(e["id"], e["cover"], e["title"], e["ep"],
+              e["page"], jsonDecode(e["other"])))
+          .toList();
       for (var image in newImages) {
         if (ImageFavoriteManager.exist(image.id, image.ep, image.page)) {
           skips++;
@@ -364,23 +367,35 @@ class HistoryManager {
   // ===== GatewaySync 导出/导入（Web 端服务端同步用；原生走 WebDAV） =====
 
   static const _historyColumns = [
-    'target', 'title', 'subtitle', 'cover', 'time', 'type',
-    'ep', 'page', 'readEpisode', 'max_page',
+    'target',
+    'title',
+    'subtitle',
+    'cover',
+    'time',
+    'type',
+    'ep',
+    'page',
+    'readEpisode',
+    'max_page',
   ];
 
   Map<String, dynamic> exportRows() => {
         'history': _db
             .select('select ${_historyColumns.join(',')} from history;')
             .map((row) => {
-                  for (var c in _historyColumns) c: row[c],
+                  for (var c in _historyColumns)
+                    c: c == 'cover'
+                        ? stableImageUrl(row[c]?.toString() ?? '')
+                        : row[c],
                 })
             .toList(),
         'imageFavorites': _db
-            .select('select id, title, cover, ep, page, other from image_favorites;')
+            .select(
+                'select id, title, cover, ep, page, other from image_favorites;')
             .map((row) => {
                   'id': row['id'],
                   'title': row['title'],
-                  'cover': row['cover'],
+                  'cover': stableImageUrl(row['cover']?.toString() ?? ''),
                   'ep': row['ep'],
                   'page': row['page'],
                   'other': row['other'],
@@ -391,7 +406,8 @@ class HistoryManager {
   bool get isEmptyForSync {
     ImageFavoriteManager.init();
     return _db.select('select count(*) as c from history;').first['c'] == 0 &&
-        _db.select('select count(*) as c from image_favorites;').first['c'] == 0;
+        _db.select('select count(*) as c from image_favorites;').first['c'] ==
+            0;
   }
 
   /// [replace] 为 true 时清空后导入（服务端较新，删除需传播）；
@@ -408,8 +424,16 @@ class HistoryManager {
         insert or replace into history (target, title, subtitle, cover, time, type, ep, page, readEpisode, max_page)
         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
       """, [
-        r['target'], r['title'], r['subtitle'], r['cover'], r['time'],
-        r['type'], r['ep'], r['page'], r['readEpisode'], r['max_page'],
+        r['target'],
+        r['title'],
+        r['subtitle'],
+        stableImageUrl(r['cover']?.toString() ?? ''),
+        r['time'],
+        r['type'],
+        r['ep'],
+        r['page'],
+        r['readEpisode'],
+        r['max_page'],
       ]);
     }
     for (var r in (blob['imageFavorites'] as List? ?? [])) {
@@ -418,12 +442,16 @@ class HistoryManager {
         insert or replace into image_favorites (id, title, cover, ep, page, other)
         values (?, ?, ?, ?, ?, ?);
       """, [
-        r['id'], r['title'], r['cover'], r['ep'], r['page'], r['other'],
+        r['id'],
+        r['title'],
+        stableImageUrl(r['cover']?.toString() ?? ''),
+        r['ep'],
+        r['page'],
+        r['other'],
       ]);
     }
     updateCache();
   }
-
 
   void remove(String id) async {
     _db.execute("""
@@ -448,7 +476,7 @@ class HistoryManager {
   }
 
   History? findSync(String target) {
-    if(_cachedHistory == null) {
+    if (_cachedHistory == null) {
       updateCache();
     }
     if (!_cachedHistory!.containsKey(target)) {
