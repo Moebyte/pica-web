@@ -6,6 +6,7 @@ import 'package:pica_comic/foundation/app.dart';
 import 'package:pica_comic/foundation/pair.dart';
 import 'package:pica_comic/foundation/ui_mode.dart';
 import 'package:pica_comic/pages/comic_page.dart';
+import 'package:pica_comic/components/tag_search_sheet.dart';
 import 'package:pica_comic/pages/search_result_page.dart';
 import 'package:pica_comic/tools/app_links.dart';
 import 'package:pica_comic/tools/extensions.dart';
@@ -186,8 +187,7 @@ class PreSearchPage extends StatelessWidget {
       return;
     }
 
-    if (searchController.language != null &&
-        targetData.enableLanguageFilter) {
+    if (searchController.language != null && targetData.enableLanguageFilter) {
       // 在添加语言筛选前，先移除掉可能存在的 language: 部分
       // 主要是为了解决强迫症
       final languagePattern = RegExp(r'\s*language:\w+');
@@ -603,6 +603,22 @@ class PreSearchPage extends StatelessWidget {
                   buildItem(logic, source.key, source.name.tl)
               ],
             ).paddingHorizontal(12),
+            if (logic.target == "picacg" || logic.target == "jm")
+              Padding(
+                padding: const EdgeInsets.only(left: 8, bottom: 4),
+                child: TextButton.icon(
+                  onPressed: () async {
+                    final selected = await showTagSearchSheet(
+                      context,
+                      sourceKey: logic.target,
+                    );
+                    if (selected == null || selected.isEmpty) return;
+                    search(selected.join(" "), logic.target);
+                  },
+                  icon: const Icon(Icons.filter_alt_outlined, size: 18),
+                  label: Text("多标签组合".tl),
+                ),
+              ),
             const SizedBox(height: 8)
           ],
         );

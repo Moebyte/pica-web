@@ -24,6 +24,7 @@ import 'package:pica_comic/network/res.dart';
 import 'package:pica_comic/network/server_downloads.dart';
 import 'package:pica_comic/pages/favorites/local_favorites.dart';
 import 'package:pica_comic/pages/reader/comic_reading_page.dart';
+import 'package:pica_comic/components/tag_search_sheet.dart';
 import 'package:pica_comic/pages/search_result_page.dart';
 import 'package:pica_comic/tools/tags_translation.dart';
 import 'package:pica_comic/tools/translations.dart';
@@ -1392,20 +1393,41 @@ abstract class BaseComicPage<T extends Object> extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Divider(),
-          SizedBox(
-              width: 100,
-              child: Row(
-                children: [
-                  const SizedBox(
-                    width: 18,
+          Padding(
+            padding: const EdgeInsets.only(left: 18, right: 12),
+            child: Row(
+              children: [
+                Text(
+                  "信息".tl,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w500, fontSize: 18),
+                ),
+                const Spacer(),
+                if ((sourceKey == "picacg" || sourceKey == "jm") &&
+                    (tags?.isNotEmpty ?? false))
+                  TextButton.icon(
+                    onPressed: () async {
+                      final selected = await showTagSearchSheet(
+                        context,
+                        sourceKey: sourceKey,
+                        groups: tags,
+                      );
+                      if (!context.mounted ||
+                          selected == null ||
+                          selected.isEmpty) {
+                        return;
+                      }
+                      context.to(() => SearchResultPage(
+                            keyword: selected.join(" "),
+                            sourceKey: sourceKey,
+                          ));
+                    },
+                    icon: const Icon(Icons.filter_alt_outlined, size: 18),
+                    label: Text("多标签".tl),
                   ),
-                  Text(
-                    "信息".tl,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w500, fontSize: 18),
-                  )
-                ],
-              )),
+              ],
+            ),
+          ),
           const SizedBox(
             height: 12,
           ),
