@@ -156,17 +156,11 @@ extension ImageExt on ComicReadingPage {
           );
         },
         pageController: logic.pageController,
-        loadingBuilder: (context, event) => Center(
-          child: SizedBox(
-            width: 20.0,
-            height: 20.0,
-            child: CircularProgressIndicator(
-              backgroundColor: context.colorScheme.surfaceContainerHigh,
-              value: event == null || event.expectedTotalBytes == null
-                  ? null
-                  : event.cumulativeBytesLoaded / event.expectedTotalBytes!,
-            ),
-          ),
+        loadingBuilder: (context, event) => ImageLoadingPlaceholder(
+          brightness: context.brightness,
+          value: event == null || event.expectedTotalBytes == null
+              ? null
+              : event.cumulativeBytesLoaded / event.expectedTotalBytes!,
         ),
         onPageChanged: (i) {
           if (i == 0) {

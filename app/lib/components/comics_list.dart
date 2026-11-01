@@ -177,11 +177,7 @@ abstract class ComicsPage<T extends BaseComic> extends StatelessWidget {
               children: [
                 if (title != null) const Appbar(title: Text("")),
                 removeSliver(header) ?? const SizedBox(),
-                const Expanded(
-                  child: Center(
-                    child: CircularProgressIndicator(),
-                  ),
-                )
+                const Expanded(child: SlimPageLoading())
               ],
             );
           } else if (logic.message != null) {

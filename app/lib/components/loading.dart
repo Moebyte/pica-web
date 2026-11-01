@@ -102,11 +102,7 @@ abstract class LoadingState<T extends StatefulWidget, S extends Object>
   Widget? buildFrame(BuildContext context, Widget child) => null;
 
   Widget buildLoading() {
-    return Center(
-      child: const CircularProgressIndicator(
-        strokeWidth: 2,
-      ).fixWidth(32).fixHeight(32),
-    );
+    return const SlimPageLoading();
   }
 
   void retry() {
@@ -281,11 +277,7 @@ abstract class MultiPageLoadingState<T extends StatefulWidget, S extends Object>
   }
 
   Widget buildLoading(BuildContext context) {
-    return Center(
-      child: const CircularProgressIndicator(
-        strokeWidth: 2,
-      ).fixWidth(32).fixHeight(32),
-    );
+    return const SlimPageLoading();
   }
 
   Widget buildError(BuildContext context, String error) {
@@ -403,6 +395,46 @@ class _FiveDotLoadingAnimationState extends State<FiveDotLoadingAnimation>
           shape: BoxShape.circle,
         ),
       ),
+    );
+  }
+}
+
+
+/// 通用页面加载态：顶部 2px 进度条 + 顶部小字提示。
+/// 不再在屏幕中央显示转圈，慢速网络下观感更稳。
+class SlimPageLoading extends StatelessWidget {
+  const SlimPageLoading({super.key, this.label});
+
+  final String? label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned(
+          left: 0,
+          right: 0,
+          top: 0,
+          child: LinearProgressIndicator(
+            minHeight: 2,
+            backgroundColor: Colors.transparent,
+          ),
+        ),
+        Positioned(
+          top: 40,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: Text(
+              label ?? "加载中…".tl,
+              style: TextStyle(
+                fontSize: 12,
+                color: context.colorScheme.onSurfaceVariant.withOpacity(0.65),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

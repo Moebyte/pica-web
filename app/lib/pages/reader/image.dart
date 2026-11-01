@@ -357,26 +357,19 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
       );
       return result;
     } else {
-      // build progress
+      // 加载中：不再在中间转圈，换成图片区域骨架 + 顶部细进度条。
+      final progressValue = (_loadingProgress != null &&
+              _loadingProgress!.expectedTotalBytes != null &&
+              _loadingProgress!.expectedTotalBytes! != 0)
+          ? _loadingProgress!.cumulativeBytesLoaded /
+              _loadingProgress!.expectedTotalBytes!
+          : null;
       return SizedBox(
         width: width,
-        height: height??300,
-        child: Center(
-          child: SizedBox(
-            width: 24,
-            height: 24,
-            child: CircularProgressIndicator(
-              backgroundColor: brightness == Brightness.dark
-                  ? Colors.white24
-                  : Colors.black12,
-              strokeWidth: 3,
-              value: (_loadingProgress != null &&
-                  _loadingProgress!.expectedTotalBytes!=null &&
-                  _loadingProgress!.expectedTotalBytes! != 0)
-                  ?_loadingProgress!.cumulativeBytesLoaded / _loadingProgress!.expectedTotalBytes!
-                  :0,
-            ),
-          ),
+        height: height ?? 300,
+        child: ImageLoadingPlaceholder(
+          brightness: brightness,
+          value: progressValue,
         ),
       );
     }
@@ -390,5 +383,55 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
     description.add(DiagnosticsProperty<ImageChunkEvent>('loadingProgress', _loadingProgress));
     description.add(DiagnosticsProperty<int>('frameNumber', _frameNumber));
     description.add(DiagnosticsProperty<bool>('wasSynchronouslyLoaded', _wasSynchronouslyLoaded));
+  }
+}
+
+
+/// 阅读器图片加载占位：图片区域骨架 + 顶部 2px 进度条 + 百分比，
+/// 替代屏幕中央的转圈（外网/慢速链路观感更好）。
+class ImageLoadingPlaceholder extends StatelessWidget {
+  const ImageLoadingPlaceholder({
+    super.key,
+    required this.brightness,
+    this.value,
+  });
+
+  final Brightness brightness;
+  final double? value;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = brightness == Brightness.dark;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ColoredBox(
+          color: dark
+              ? Colors.white.withOpacity(0.04)
+              : Colors.black.withOpacity(0.03),
+        ),
+        Align(
+          alignment: Alignment.topCenter,
+          child: LinearProgressIndicator(
+            minHeight: 2,
+            value: value,
+            backgroundColor: Colors.transparent,
+            color: dark ? Colors.white70 : null,
+          ),
+        ),
+        if (value != null)
+          Positioned(
+            right: 10,
+            bottom: 10,
+            child: Text(
+              "${((value ?? 0) * 100).round()}%",
+              style: TextStyle(
+                fontSize: 11,
+                color: dark ? Colors.white54 : Colors.black45,
+              ),
+            ),
+          ),
+      ],
+    );
   }
 }

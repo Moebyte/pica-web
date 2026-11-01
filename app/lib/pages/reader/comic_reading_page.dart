@@ -381,8 +381,9 @@ class ComicReadingPage extends StatelessWidget {
             if (logic.isLoading) {
               history?.readEpisode.add(logic.order);
               loadInfo(logic);
-              return const Center(
-                child: CircularProgressIndicator(),
+              return ReaderLoadingPlaceholder(
+                dark: useDarkBackground,
+                onExit: () => Navigator.of(context).maybePop(),
               );
             } else if (logic.urls.isNotEmpty) {
               if (logic.readingMethod ==
@@ -772,5 +773,73 @@ class ComicReadingPage extends StatelessWidget {
             ));
     }
     return null;
+  }
+}
+
+
+/// 阅读器打开章节时的加载占位：顶部细进度条 + 页面骨架 + 退出按钮，
+/// 避免在屏幕正中长时间转圈。
+class ReaderLoadingPlaceholder extends StatelessWidget {
+  const ReaderLoadingPlaceholder({
+    super.key,
+    required this.dark,
+    required this.onExit,
+  });
+
+  final bool dark;
+  final VoidCallback onExit;
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = dark ? Colors.white70 : context.colorScheme.onSurfaceVariant;
+    return ColoredBox(
+      color: dark ? Colors.black : context.colorScheme.surface,
+      child: SafeArea(
+        child: Stack(
+          children: [
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              child: LinearProgressIndicator(
+                minHeight: 2,
+                backgroundColor: Colors.transparent,
+                color: dark ? Colors.white70 : null,
+              ),
+            ),
+            Positioned(
+              left: 4,
+              top: 0,
+              child: IconButton(
+                icon: const Icon(Icons.close),
+                color: fg,
+                tooltip: "关闭".tl,
+                onPressed: onExit,
+              ),
+            ),
+            Center(
+              child: FractionallySizedBox(
+                widthFactor: 0.62,
+                heightFactor: 0.72,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: dark
+                        ? Colors.white.withOpacity(0.04)
+                        : Colors.black.withOpacity(0.03),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Center(
+                    child: Text(
+                      "正在加载章节…".tl,
+                      style: TextStyle(fontSize: 13, color: fg),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
