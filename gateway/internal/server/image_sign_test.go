@@ -305,3 +305,79 @@ func TestImageTokenHeadersDoNotBypassCookieVault(t *testing.T) {
 		t.Fatalf("headers = %v", p.Headers)
 	}
 }
+
+func TestImageSignBatch(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("\x89PNG\r\n\x1a\n0123456789"))
+	}))
+	defer up.Close()
+
+	e := newTestEnv(t, nil)
+	resp, raw := postJSON(t, e, "/api/img/sign/batch", map[string]any{
+		"ttl": 86400,
+		"items": []map[string]any{
+			{"url": up.URL + "/1.png", "headers": map[string]string{"Referer": "https://a/"}},
+			{"url": up.URL + "/2.png", "profile": "jm", "jm": map[string]string{
+				"epsId": "1", "scrambleId": "220980", "bookId": "00001",
+			}},
+		},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("batch sign status = %d body=%q", resp.StatusCode, raw)
+	}
+	var doc struct {
+		OK   bool     `json:"ok"`
+		URLs []string `json:"urls"`
+		Exp  string   `json:"expiresAt"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if !doc.OK || len(doc.URLs) != 2 || doc.Exp == "" {
+		t.Fatalf("batch response = %+v", doc)
+	}
+	for i, u := range doc.URLs {
+		if !strings.HasPrefix(u, "/api/img/") {
+			t.Fatalf("urls[%d] = %q", i, u)
+		}
+	}
+
+	// A batch-signed URL must work through the normal image endpoint.
+	imgResp, err := e.client.Get(e.gw.URL + doc.URLs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	imgResp.Body.Close()
+	if imgResp.StatusCode != http.StatusOK {
+		t.Fatalf("batch image status = %d", imgResp.StatusCode)
+	}
+
+	// Deterministic within the expiry window.
+	_, raw2 := postJSON(t, e, "/api/img/sign/batch", map[string]any{
+		"ttl":   86400,
+		"items": []map[string]any{{"url": up.URL + "/1.png", "headers": map[string]string{"Referer": "https://a/"}}},
+	})
+	var doc2 struct {
+		URLs []string `json:"urls"`
+	}
+	_ = json.Unmarshal(raw2, &doc2)
+	if len(doc2.URLs) != 1 || doc2.URLs[0] != doc.URLs[0] {
+		t.Fatalf("batch sign not deterministic: %v vs %v", doc2.URLs, doc.URLs[:1])
+	}
+
+	// Validation: empty items, too many items, bad URL.
+	if r, _ := postJSON(t, e, "/api/img/sign/batch", map[string]any{"items": []any{}}); r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("empty items = %d", r.StatusCode)
+	}
+	tooMany := make([]map[string]any, maxImageSignBatchItems+1)
+	for i := range tooMany {
+		tooMany[i] = map[string]any{"url": up.URL + "/x.png"}
+	}
+	if r, _ := postJSON(t, e, "/api/img/sign/batch", map[string]any{"items": tooMany}); r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("too many = %d", r.StatusCode)
+	}
+	if r, _ := postJSON(t, e, "/api/img/sign/batch", map[string]any{"items": []map[string]any{{"url": "not a url"}}}); r.StatusCode != http.StatusBadRequest && r.StatusCode != http.StatusForbidden {
+		t.Fatalf("bad url = %d", r.StatusCode)
+	}
+}

@@ -16,6 +16,7 @@ import 'package:pica_comic/foundation/nav_snapshot.dart';
 import 'package:pica_comic/foundation/web_history_bridge.dart';
 import 'package:pica_comic/foundation/web_url_strategy.dart';
 import 'package:pica_comic/init.dart';
+import 'package:pica_comic/network/gateway_sync.dart';
 import 'package:pica_comic/network/http_client.dart';
 import 'package:pica_comic/pages/auth_page.dart';
 import 'package:pica_comic/pages/main_page.dart';
@@ -58,7 +59,17 @@ void main(List<String> args) {
     if (kIsWeb) {
       WebHistoryBridge.install();
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        Future.delayed(const Duration(milliseconds: 150), NavSnapshot.replay);
+        Future.delayed(const Duration(milliseconds: 150), () async {
+          // 有恢复计划时稍等账号同步，避免恢复出的页面拿不到登录态；
+          // 最多等 2 秒，不拖累正常进入。
+          if (NavSnapshot.hasRestorePlan) {
+            try {
+              await GatewaySync.instance.restoreAll
+                  .timeout(const Duration(seconds: 2));
+            } catch (_) {}
+          }
+          NavSnapshot.replay();
+        });
       });
     }
     if (App.isDesktop) {

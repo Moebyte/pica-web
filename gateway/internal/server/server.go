@@ -130,6 +130,7 @@ func New(o Options) (*Server, error) {
 	mux.Handle("POST /api/src/{src}/logout", s.requireAuth(http.HandlerFunc(s.handleSrcLogout)))
 	mux.Handle("POST /api/tunnel", s.requireAuth(http.HandlerFunc(s.handleTunnel)))
 	mux.Handle("GET /api/img/sign", s.requireAuth(http.HandlerFunc(s.handleImageSign)))
+	mux.Handle("POST /api/img/sign/batch", s.requireAuth(http.HandlerFunc(s.handleImageSignBatch)))
 	mux.Handle("POST /api/img/sign", s.requireAuth(http.HandlerFunc(s.handleImageSignPost)))
 	mux.Handle("GET /api/img/{token}", s.requireAuth(http.HandlerFunc(s.handleImage)))
 	mux.Handle("GET /api/cookies", s.requireAuth(http.HandlerFunc(s.handleCookiesList)))

@@ -112,6 +112,93 @@ class ImageManager {
     ]);
   }
 
+  static const int _signBatchSize = 100;
+
+  /// 批量预签整章的图片 URL：一次 `POST /api/img/sign/batch` 拿回所有
+  /// token，之后每张图只需一次 GET。外网/WG 下每页少一个 RTT。
+  Future<void> primeSignedImages(List<Map<String, dynamic>> specs) async {
+    if (!kIsWeb || specs.isEmpty) {
+      return;
+    }
+    final pending = <String, Map<String, dynamic>>{};
+    final now = DateTime.now();
+    for (final spec in specs) {
+      final url = spec["url"];
+      if (url is! String || url.isEmpty) {
+        continue;
+      }
+      final headers = <String, String>{};
+      final rawHeaders = spec["headers"];
+      if (rawHeaders is Map) {
+        rawHeaders.forEach((k, v) {
+          headers["$k"] = "$v";
+        });
+      }
+      final signable = signableImageHeaders(headers);
+      final profile = spec["profile"] as String?;
+      Map<String, String>? jm;
+      if (spec["jm"] is Map) {
+        jm = <String, String>{};
+        (spec["jm"] as Map).forEach((k, v) {
+          jm!["$k"] = "$v";
+        });
+      }
+      final key = _signedImageKey(url, signable, profile, jm);
+      final cached = _signedImages[key];
+      if (cached != null &&
+          cached.expiresAt.isAfter(now.add(const Duration(minutes: 2)))) {
+        continue;
+      }
+      pending.putIfAbsent(
+          key,
+          () => {
+                "url": url,
+                if (signable.isNotEmpty) "headers": signable,
+                if (profile != null && profile.isNotEmpty) "profile": profile,
+                if (jm != null && jm.isNotEmpty) "jm": jm,
+              });
+    }
+    if (pending.isEmpty) {
+      return;
+    }
+    final entries = pending.entries.toList();
+    for (var start = 0; start < entries.length; start += _signBatchSize) {
+      final end = start + _signBatchSize < entries.length
+          ? start + _signBatchSize
+          : entries.length;
+      final chunk = entries.sublist(start, end);
+      try {
+        final res = await _signClient.post<dynamic>("/api/img/sign/batch",
+            data: {
+              "ttl": 86400,
+              "items": [for (final entry in chunk) entry.value],
+            });
+        final data = res.data;
+        if (data is! Map || data["urls"] is! List) {
+          continue;
+        }
+        final urls = data["urls"] as List;
+        var expiresAt = DateTime.now().add(const Duration(hours: 1));
+        final rawExpiry = data["expiresAt"];
+        if (rawExpiry is String) {
+          expiresAt = DateTime.tryParse(rawExpiry)?.toLocal() ?? expiresAt;
+        }
+        for (var i = 0; i < chunk.length && i < urls.length; i++) {
+          final signed = urls[i];
+          if (signed is! String || signed.isEmpty) {
+            continue;
+          }
+          if (_signedImages.length >= _signedImageLimit) {
+            _signedImages.remove(_signedImages.keys.first);
+          }
+          _signedImages[chunk[i].key] = _SignedImage(signed, expiresAt);
+        }
+      } catch (e) {
+        log("Failed to batch sign image URLs: $e", "Network", LogLevel.warning);
+      }
+    }
+  }
+
   /// Signs [url] through `POST /api/img/sign`. Returns null on any failure so
   /// callers can fall back to the legacy tunnel path.
   Future<String?> _signImageUrl(String url, Map<String, String> headers,

@@ -162,8 +162,9 @@ class JmNetwork {
   }
 
   Future<void> init() async {
-    await _ensureFreshDomains();
     loginFromAppdata();
+    // 域名表刷新会走网络（bytepluses），不能阻塞启动首帧。
+    unawaited(_ensureFreshDomains());
   }
 
   Future<Res<dynamic>> getAppVersionCode() async {

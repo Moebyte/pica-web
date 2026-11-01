@@ -436,3 +436,41 @@ GatewaySync 扩展为多键：`account` / `history` / `favorites`（均为网关
 
 媒体：顶部进度条在深色阅读主题下用白色，浅色用主题色；加载中随时可按 X/系统返回退出。
 实测（CDP 限速 600ms 延迟 / 80KB/s 模拟 WG 外网）：详情骨架屏、阅读器加载占位、加载完成后 1/54 正常渲染。
+
+### 12.9 启动首帧解耦 + 批量签名 + 关闭 Service Worker（2026-11-01）
+
+三项针对"外网/WG 回源慢"的体验优化，均已上线并实测。
+
+**1）启动首帧不再被网络请求阻塞**
+
+- 账号恢复 `GatewaySync.restore()` 以 **1.2s 为上限**等待；超时后先出首帧，
+  恢复仍在后台继续，完成后热刷新账号态（`accountRestore.whenComplete`）。
+- 历史/收藏等 `restoreData()` 不再 await；JM 域名刷新改为 `unawaited`。
+- `GatewaySync` 增加 `restoreAll` / `accountRestoreDone`，`NavSnapshot` 重放
+  最多等 2s，避免"刷新恢复页面"与账号恢复互相死等。
+- 实测：CDP 对每个 `/api/*` 注入 3s 延迟（模拟 WG 高 RTT）时，
+  `flutter-first-frame` = **3.28s**（其中 API 等待约 1.2s，其余为引擎与资源），
+  首屏已显示 "Accounts 3 accounts logged in"；改造前需等账号 JSON 返回后才出帧。
+
+**2）整章图片批量签名（每章 1 次 RTT）**
+
+- 网关新增 `POST /api/img/sign/batch`：一次最多 300 项，逐项做 URL 白名单校验后
+  用现有 signer 签发，返回 `urls` 与统一 `expiresAt`（TTL 上限与单张一致）。
+- 客户端 `ReadingData.signSpec()` 提供签名参数（JM 含 `epsId/scrambleId/bookId`，
+  其他源为空即可）；阅读器 `loadInfo` 在章节数据到达后调用
+  `ImageManager.primeSignedImages()`，**等待批量完成再结束章节 loading**，
+  使首图只付一次批量 RTT，后续页面直接命中缓存、只发图片 GET。
+- 实测：JM 第 1 话 65 页，单张 `/api/img/sign` 请求 **0 次**、
+  `/api/img/sign/batch` **1 次**；滚动加载 12 张正文图全部 2xx，无 403/4xx，
+  WebP 重组正常，页码 1/65 显示正确。
+
+**3）关闭 Service Worker**
+
+- `web/index.html` 移除 SW 注册与 `serviceWorkerVersion`，并在启动时
+  注销所有既有 SW、清空 `caches`，避免旧构建长期被缓存。
+- 实测（生产域名）：`getRegistrations()` = 0、`controller` = null、
+  `caches.keys()` = `[]`，网络记录中无 `flutter_service_worker.js` 请求。
+- 代价：离线打开不再可用（本应用强依赖网关，离线意义有限）；换取"部署即生效"。
+
+**验证环境**：`https://picacg.example.com`，Chromium 移动视口 390×844，
+真实 picacg/JM 账号。阅读器批量签名测试使用 JM 65 页章节。

@@ -58,9 +58,17 @@ Future<void> init() async {
     await appdata.readData();
     SingleInstanceCookieJar("${App.dataPath}/cookies.db");
     if (kIsWeb) {
-      // 先恢复服务端账号态（源凭据/Cookie/相关设置），再初始化漫画源与
-      // 各网络层——reLogin 依赖这里写入的数据。
-      await GatewaySync.instance.restore();
+      // 远端账号恢复最多等 1.2s：局域网内通常直接完成；外网/WG 慢时
+      // 先启动渲染，恢复完成后热刷新漫画源（见 _refreshAfterLateAccountRestore）。
+      final accountRestore = GatewaySync.instance.restore();
+      var timedOut = false;
+      await accountRestore.timeout(const Duration(milliseconds: 1200),
+          onTimeout: () {
+        timedOut = true;
+      });
+      if (timedOut) {
+        accountRestore.whenComplete(_refreshAfterLateAccountRestore);
+      }
     }
     if (!kIsWeb) {
       HttpProxyServer.createConfigFile();
@@ -103,13 +111,32 @@ Future<void> init() async {
       AppTranslation.init(),
     ]);
     if (kIsWeb) {
-      // manager 建表后恢复收藏/历史（删除可传播的整库同步）
-      await GatewaySync.instance.restoreData();
+      // manager 建表后恢复收藏/历史：不阻塞首帧，完成后刷新「我」页计数。
+      GatewaySync.instance.restoreData().whenComplete(() {
+        StateController.findOrNull(tag: "me_page")?.update();
+      });
     }
     CacheManager().setLimitSize(appdata.appSettings.cacheLimit);
   } catch (e, s) {
     LogManager.addLog(
         LogLevel.error, "Init", "App initialization failed!\n$e$s");
+  }
+}
+
+/// 账号恢复晚于启动时（外网慢），补做源重载与登录态刷新。
+Future<void> _refreshAfterLateAccountRestore() async {
+  try {
+    await ComicSource.reload();
+    await Future.wait([
+      JmNetwork().init(),
+      NhentaiNetwork().init(),
+    ]);
+    StateController.findOrNull(tag: "me_page")?.update();
+    LogManager.addLog(LogLevel.info, "GatewaySync",
+        "late account restore applied; sources reloaded");
+  } catch (e, s) {
+    LogManager.addLog(LogLevel.error, "GatewaySync",
+        "late account refresh failed: $e\n$s");
   }
 }
 

@@ -109,6 +109,23 @@ func (s *Server) imageSignTTL(w http.ResponseWriter, rawTTL string) (time.Durati
 }
 
 // writeImageSign validates the common signing inputs and returns the token.
+// parseImageSignTTL validates an optional ttl (seconds) and clamps it to the
+// token maximum. It writes an error response and returns ok=false on failure.
+func (s *Server) parseImageSignTTL(w http.ResponseWriter, ttlParam *int) (time.Duration, bool) {
+	ttl := s.cfg.ImgTokenTTLDuration()
+	if ttlParam != nil {
+		if *ttlParam <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid_ttl", "ttl must be a positive number of seconds")
+			return 0, false
+		}
+		ttl = time.Duration(*ttlParam) * time.Second
+		if ttl > imgproxy.MaxTokenTTL {
+			ttl = imgproxy.MaxTokenTTL
+		}
+	}
+	return ttl, true
+}
+
 func (s *Server) writeImageSign(w http.ResponseWriter, r *http.Request, rawURL, profile string,
 	headers map[string]string, jm *imgproxy.JMParams, ttl time.Duration) {
 	if rawURL == "" {

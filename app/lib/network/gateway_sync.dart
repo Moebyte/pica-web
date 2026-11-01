@@ -45,6 +45,15 @@ class GatewaySync {
   Timer? _timer;
   bool _pushing = false;
 
+  final Completer<void> _accountRestoreDone = Completer<void>();
+  final Completer<void> _dataRestoreDone = Completer<void>();
+
+  /// 账号与收藏/历史都完成恢复（供启动时按需等待）
+  Future<void> get restoreAll =>
+      Future.wait([_accountRestoreDone.future, _dataRestoreDone.future]);
+
+  Future<void> get accountRestoreDone => _accountRestoreDone.future;
+
   bool get enabled => kIsWeb;
 
   String _endpoint(String key) =>
@@ -61,7 +70,10 @@ class GatewaySync {
 
   /// 启动时拉取账号态（在 ComicSource.init / 各网络层 init 之前调用）。
   Future<void> restore() async {
-    if (!enabled) return;
+    if (!enabled) {
+      if (!_accountRestoreDone.isCompleted) _accountRestoreDone.complete();
+      return;
+    }
     try {
       var res = await _client.get(_endpoint(_accountKey));
       if (res.statusCode == 200) {
@@ -79,12 +91,17 @@ class GatewaySync {
       }
     } catch (e) {
       log("restore failed: $e", "GatewaySync", LogLevel.warning);
+    } finally {
+      if (!_accountRestoreDone.isCompleted) _accountRestoreDone.complete();
     }
   }
 
   /// 启动时拉取数据键（在两个 manager init 之后调用——它们负责建表）。
   Future<void> restoreData() async {
-    if (!enabled) return;
+    if (!enabled) {
+      if (!_dataRestoreDone.isCompleted) _dataRestoreDone.complete();
+      return;
+    }
     for (final key in _dataKeys) {
       try {
         var res = await _client.get(_endpoint(key));
@@ -120,6 +137,7 @@ class GatewaySync {
         log("restore $key failed: $e", "GatewaySync", LogLevel.warning);
       }
     }
+    if (!_dataRestoreDone.isCompleted) _dataRestoreDone.complete();
   }
 
   /// 去抖推送：登录/登出/收藏/历史变化都会在 2 秒窗口内合并成一次推送。

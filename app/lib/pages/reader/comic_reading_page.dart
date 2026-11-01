@@ -565,6 +565,26 @@ class ComicReadingPage extends StatelessWidget {
     ));
   }
 
+  /// Web：整章图片签名一次性预取，之后每页只发图片 GET。
+  /// 这里等待它完成再结束章节 loading：首图只付一次批量签名 RTT，
+  /// 之后所有页都省掉单张 sign 的往返。
+  Future<void> _prefetchSignatures(ComicReadingPageLogic logic) async {
+    if (!App.isWeb || logic.urls.isEmpty) {
+      return;
+    }
+    final specs = <Map<String, dynamic>>[];
+    for (final url in logic.urls) {
+      final spec = readingData.signSpec(logic.order, url);
+      if (spec == null) {
+        continue;
+      }
+      specs.add({"url": url, ...spec});
+    }
+    if (specs.isNotEmpty) {
+      await ImageManager().primeSignedImages(specs);
+    }
+  }
+
   void loadInfo(ComicReadingPageLogic logic) async {
     logic.urls = [];
     var res = await readingData.loadEp(logic.order);
@@ -572,6 +592,7 @@ class ComicReadingPage extends StatelessWidget {
       logic.errorMessage = res.errorMessage;
     } else {
       logic.urls = res.data;
+      await _prefetchSignatures(logic);
     }
     logic.isLoading = false;
     logic.update();

@@ -71,6 +71,10 @@ abstract class ReadingData {
   Future<Res<List<String>>> loadEpNetwork(int ep);
 
   Stream<DownloadProgress> loadImageNetwork(int ep, int page, String url);
+
+  /// Web 批量预签用的签名规格（真实 URL 由调用方补上）。
+  /// 返回 null 表示该源需要逐页解析真实图片地址（如 EH/hitomi），跳过预签。
+  Map<String, dynamic>? signSpec(int ep, String url) => null;
 }
 
 class PicacgReadingData extends ReadingData {
@@ -107,6 +111,9 @@ class PicacgReadingData extends ReadingData {
   Stream<DownloadProgress> loadImageNetwork(int ep, int page, String url) {
     return ImageManager().getImage(url);
   }
+
+  @override
+  Map<String, dynamic>? signSpec(int ep, String url) => const {};
 
   @override
   FavoriteType get favoriteType => FavoriteType.picacg;
@@ -210,6 +217,26 @@ class JmReadingData extends ReadingData {
   }
 
   @override
+  Map<String, dynamic>? signSpec(int ep, String url) {
+    var bookId = "";
+    for (int i = url.length - 1; i >= 0; i--) {
+      if (url[i] == '/') {
+        bookId = url.substring(i + 1, url.length - 5);
+        break;
+      }
+    }
+    return {
+      "headers": const <String, String>{},
+      "profile": "jm",
+      "jm": {
+        "epsId": eps.keys.elementAtOrNull(ep - 1) ?? id,
+        "scrambleId": "220980",
+        "bookId": bookId,
+      },
+    };
+  }
+
+  @override
   final Map<String, String> eps;
 
   @override
@@ -302,6 +329,9 @@ class HtReadingData extends ReadingData {
   }
 
   @override
+  Map<String, dynamic>? signSpec(int ep, String url) => const {};
+
+  @override
   FavoriteType get favoriteType => FavoriteType.htManga;
 }
 
@@ -338,6 +368,9 @@ class NhentaiReadingData extends ReadingData {
   Stream<DownloadProgress> loadImageNetwork(int ep, int page, String url) {
     return ImageManager().getImage(url);
   }
+
+  @override
+  Map<String, dynamic>? signSpec(int ep, String url) => const {};
 
   @override
   FavoriteType get favoriteType => FavoriteType.nhentai;
