@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:pica_comic/base.dart';
+import 'package:pica_comic/components/selection_copy_button.dart';
 import 'package:pica_comic/components/window_frame.dart';
 import 'package:pica_comic/foundation/app.dart';
 import 'package:pica_comic/foundation/app_page_route.dart';
@@ -107,6 +108,7 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  final GlobalKey<SelectionAreaState> _selectionAreaKey = GlobalKey();
   DateTime time = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool forceRebuild = false;
@@ -241,13 +243,13 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         themeMode: appdata.appSettings.darkMode == 2
             ? ThemeMode.dark
             : appdata.appSettings.darkMode == 1
-            ? ThemeMode.light
-            : ThemeMode.system,
+                ? ThemeMode.light
+                : ThemeMode.system,
         onGenerateRoute: (settings) => AppPageRoute(
           builder: (context) => notFirstUse
               ? (appdata.settings[13] == "1"
-              ? const AuthPage()
-              : MainPage(initialTab: NavSnapshot.restoredMainTab))
+                  ? const AuthPage()
+                  : MainPage(initialTab: NavSnapshot.restoredMainTab))
               : const WelcomePage(),
         ),
         localizationsDelegates: const [
@@ -275,9 +277,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
             if (App.isDesktop) {
               widget = Shortcuts(
                 shortcuts: {
-                  LogicalKeySet(LogicalKeyboardKey.escape):
-                  VoidCallbackIntent(
-                        () {
+                  LogicalKeySet(LogicalKeyboardKey.escape): VoidCallbackIntent(
+                    () {
                       if (App.canPop) {
                         App.globalBack();
                       } else {
@@ -287,6 +288,27 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                   ),
                 },
                 child: WindowFrame(widget),
+              );
+            }
+            if (kIsWeb) {
+              // 让所有页面文字都能长按/拖动选中并复制。Flutter Web 的文字
+              // 画在 canvas 上，没有它浏览器无法做原生选择。选中后额外浮出
+              // “复制”按钮，因为移动 Web 上 Flutter 的原生选择工具栏不可靠。
+              widget = SelectionArea(
+                key: _selectionAreaKey,
+                onSelectionChanged: (content) =>
+                    SelectionCopyButton.update(content?.plainText),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    widget,
+                    SelectionCopyButton(
+                      onCopied: () => _selectionAreaKey
+                          .currentState?.selectableRegion
+                          .clearSelection(),
+                    ),
+                  ],
+                ),
               );
             }
             return _SystemUiProvider(widget);

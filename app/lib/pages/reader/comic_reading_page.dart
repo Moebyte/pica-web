@@ -13,11 +13,14 @@ import 'package:photo_view/photo_view_gallery.dart';
 import 'package:pica_comic/comic_source/comic_source.dart';
 import 'package:pica_comic/components/components.dart';
 import 'package:pica_comic/components/custom_slider.dart';
+import 'package:pica_comic/components/image_actions.dart';
+import 'package:pica_comic/components/long_press_listener.dart';
 import 'package:pica_comic/components/scrollable_list/src/item_positions_listener.dart';
 import 'package:pica_comic/components/scrollable_list/src/scrollable_positioned_list.dart';
 import 'package:pica_comic/components/window_frame.dart';
 import 'package:pica_comic/foundation/image_loader/base_image_provider.dart';
 import 'package:pica_comic/foundation/image_loader/file_image_loader.dart';
+import 'package:pica_comic/foundation/image_loader/image_bytes.dart';
 import 'package:pica_comic/foundation/image_loader/stream_image_provider.dart';
 import 'package:pica_comic/foundation/local_favorites.dart';
 import 'package:pica_comic/network/download.dart';
@@ -291,10 +294,8 @@ class ComicReadingPage extends StatelessWidget {
             DeviceOrientation.landscapeRight
           ]);
         } else if (appdata.settings[76] == "2") {
-          SystemChrome.setPreferredOrientations([
-            DeviceOrientation.portraitUp,
-            DeviceOrientation.portraitDown
-          ]);
+          SystemChrome.setPreferredOrientations(
+              [DeviceOrientation.portraitUp, DeviceOrientation.portraitDown]);
         }
       }
       //进入阅读器时清除内存中的缓存, 并且增大限制
@@ -325,7 +326,8 @@ class ComicReadingPage extends StatelessWidget {
       ComicImage.clear();
       StateController.remove<ComicReadingPageLogic>();
       // 更新本地收藏
-      LocalFavoritesManager().onReadEnd(readingData.favoriteId, readingData.favoriteType);
+      LocalFavoritesManager()
+          .onReadEnd(readingData.favoriteId, readingData.favoriteType);
       // 保存历史记录
       if (history != null) {
         _updateHistory(logic, true);
@@ -412,47 +414,50 @@ class ComicReadingPage extends StatelessWidget {
                 logic.scrollManager ??= ScrollManager(logic);
               }
 
-              var body = Listener(
-                onPointerMove: TapController.onPointerMove,
-                onPointerUp: TapController.onTapUp,
-                onPointerDown: TapController.onTapDown,
-                behavior: HitTestBehavior.translucent,
-                onPointerCancel: TapController.onTapCancel,
-                child: Stack(
-                  children: [
-                    buildComicView(
-                      logic,
-                      context,
-                      readingData.id,
-                    ),
-                    if (MediaQuery.of(context).platformBrightness ==
-                            Brightness.dark &&
-                        appdata.appSettings.reduceBrightnessInDarkMode)
-                      Positioned(
-                        top: 0,
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        child: IgnorePointer(
-                          child: ColoredBox(
-                            color: Colors.black.withOpacity(0.2),
-                          ),
+              var body = LongPressPointerDetector(
+                  onLongPress: (position) =>
+                      _onReaderLongPress(context, logic, position),
+                  child: Listener(
+                    onPointerMove: TapController.onPointerMove,
+                    onPointerUp: TapController.onTapUp,
+                    onPointerDown: TapController.onTapDown,
+                    behavior: HitTestBehavior.translucent,
+                    onPointerCancel: TapController.onTapCancel,
+                    child: Stack(
+                      children: [
+                        buildComicView(
+                          logic,
+                          context,
+                          readingData.id,
                         ),
-                      ),
+                        if (MediaQuery.of(context).platformBrightness ==
+                                Brightness.dark &&
+                            appdata.appSettings.reduceBrightnessInDarkMode)
+                          Positioned(
+                            top: 0,
+                            bottom: 0,
+                            left: 0,
+                            right: 0,
+                            child: IgnorePointer(
+                              child: ColoredBox(
+                                color: Colors.black.withOpacity(0.2),
+                              ),
+                            ),
+                          ),
 
-                    if (appdata.appSettings.showPageInfoInReader)
-                      buildPageInfoText(logic, context),
+                        if (appdata.appSettings.showPageInfoInReader)
+                          buildPageInfoText(logic, context),
 
-                    //底部工具栏
-                    buildBottomToolBar(logic, context, readingData.hasEp),
+                        //底部工具栏
+                        buildBottomToolBar(logic, context, readingData.hasEp),
 
-                    ...buildButtons(logic, context),
+                        ...buildButtons(logic, context),
 
-                    //顶部工具栏
-                    buildTopToolBar(logic, context),
-                  ],
-                ),
-              );
+                        //顶部工具栏
+                        buildTopToolBar(logic, context),
+                      ],
+                    ),
+                  ));
 
               return KeyboardListener(
                 focusNode: logic.focusNode,
@@ -467,6 +472,52 @@ class ComicReadingPage extends StatelessWidget {
         ),
       );
     });
+  }
+
+  /// 只在图片区域触发长按菜单，避免长按顶栏标题时误弹图片菜单。
+  void _onReaderLongPress(
+      BuildContext context, ComicReadingPageLogic logic, Offset position) {
+    final size = MediaQuery.of(context).size;
+    if (position.dy < 84 || position.dy > size.height - 150) {
+      return;
+    }
+    _showImageActions(context, logic);
+  }
+
+  /// Web：长按正文图片弹出复制/保存菜单。
+  void _showImageActions(BuildContext context, ComicReadingPageLogic logic) {
+    if (!App.isWeb || logic.urls.isEmpty) {
+      return;
+    }
+    final pageIndex = logic.index < 1
+        ? 0
+        : (logic.index > logic.urls.length
+            ? logic.urls.length - 1
+            : logic.index - 1);
+    final url = logic.urls[pageIndex];
+    final key = logic.data.buildImageKey(logic.order, pageIndex, url);
+    Future<Uint8List?> loadBytes() async {
+      final cached = ImageByteCache.get(key);
+      if (cached != null) {
+        return cached;
+      }
+      Uint8List? bytes;
+      await for (final progress
+          in logic.data.loadImage(logic.order, pageIndex, url)) {
+        if (progress.data != null) {
+          bytes = progress.data;
+        }
+      }
+      return bytes;
+    }
+
+    showImageActionsSheet(
+      context,
+      title: "${"第".tl}${pageIndex + 1}${"页".tl} · ${logic.data.title}",
+      fileName:
+          "${logic.data.title}-${logic.data.hasEp ? "ep${logic.order}-" : ""}${pageIndex + 1}",
+      loadBytes: loadBytes,
+    );
   }
 
   Widget buildErrorView(ComicReadingPageLogic logic, BuildContext context) {
@@ -796,7 +847,6 @@ class ComicReadingPage extends StatelessWidget {
     return null;
   }
 }
-
 
 /// 阅读器打开章节时的加载占位：顶部细进度条 + 页面骨架 + 退出按钮，
 /// 避免在屏幕正中长时间转圈。

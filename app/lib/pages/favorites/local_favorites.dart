@@ -23,6 +23,7 @@ import '../../network/jm_network/jm_network.dart';
 import '../../network/nhentai_network/nhentai_main_network.dart';
 import '../../network/picacg_network/methods.dart';
 import '../../tools/io_tools.dart';
+import 'package:pica_comic/components/adaptive_selectable_text.dart';
 
 extension LocalFavoritesExt on FavoriteItem {
   void addDownload() {
@@ -270,9 +271,7 @@ class RenameFolderDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final controller = TextEditingController(
-      text: before
-    );
+    final controller = TextEditingController(text: before);
     final FocusNode focusNode = FocusNode();
     focusNode.requestFocus();
     return SimpleDialog(
@@ -541,7 +540,7 @@ class LocalFavoriteTile extends ComicTile {
                   children: [
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                      child: SelectableText(
+                      child: AdaptiveSelectableText(
                         title.replaceAll("\n", ""),
                         style: const TextStyle(fontSize: 22),
                       ),

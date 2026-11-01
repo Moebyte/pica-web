@@ -31,6 +31,7 @@ import 'show_image_page.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shimmer_animation/shimmer_animation.dart';
 import 'dart:math' as math;
+import 'package:pica_comic/components/adaptive_selectable_text.dart';
 
 class ComicPage extends StatelessWidget {
   const ComicPage({
@@ -822,52 +823,52 @@ abstract class BaseComicPage<T extends Object> extends StatelessWidget {
     return NavSnapshotScope(
       data: NavSnapshot.comicData(sourceKey, navSnapshotId),
       child: LayoutBuilder(builder: (context, constraints) {
-      return Scaffold(
-        body: StateBuilder<ComicPageLogic<T>>(
-          tag: tag,
-          init: ComicPageLogic<T>(),
-          initState: (logic) {
-            tagsStack.push(_logic);
-            _logic.favoriteOnPlatform = favoriteOnPlatformInitial;
-          },
-          dispose: (logic) {
-            tagsStack.pop();
-          },
-          builder: (logic) {
-            _logic.width = constraints.maxWidth;
-            _logic.height = constraints.maxHeight;
-            if (logic.loading) {
-              logic.get(loadData, loadFavorite, () => id);
-              return buildLoading(context);
-            } else if (logic.message != null) {
-              return NetworkError(
-                message: logic.message!,
-                retry: logic.refresh_,
-              );
-            } else {
-              _logic.thumbnailsData ??= thumbnailsCreator;
-              logic.controller.removeListener(scrollListener);
-              logic.controller.addListener(scrollListener);
-              return SmoothCustomScrollView(
-                controller: logic.controller,
-                slivers: [
-                  buildTitle(logic),
-                  buildComicInfo(logic, context),
-                  buildTags(logic, context),
-                  ...buildEpisodeInfo(context),
-                  ...buildIntroduction(context),
-                  ...buildThumbnails(context),
-                  ...buildRecommendation(context),
-                  SliverPadding(
-                    padding: EdgeInsets.only(
-                        bottom: MediaQuery.of(context).padding.bottom),
-                  )
-                ],
-              );
-            }
-          },
-        ),
-      );
+        return Scaffold(
+          body: StateBuilder<ComicPageLogic<T>>(
+            tag: tag,
+            init: ComicPageLogic<T>(),
+            initState: (logic) {
+              tagsStack.push(_logic);
+              _logic.favoriteOnPlatform = favoriteOnPlatformInitial;
+            },
+            dispose: (logic) {
+              tagsStack.pop();
+            },
+            builder: (logic) {
+              _logic.width = constraints.maxWidth;
+              _logic.height = constraints.maxHeight;
+              if (logic.loading) {
+                logic.get(loadData, loadFavorite, () => id);
+                return buildLoading(context);
+              } else if (logic.message != null) {
+                return NetworkError(
+                  message: logic.message!,
+                  retry: logic.refresh_,
+                );
+              } else {
+                _logic.thumbnailsData ??= thumbnailsCreator;
+                logic.controller.removeListener(scrollListener);
+                logic.controller.addListener(scrollListener);
+                return SmoothCustomScrollView(
+                  controller: logic.controller,
+                  slivers: [
+                    buildTitle(logic),
+                    buildComicInfo(logic, context),
+                    buildTags(logic, context),
+                    ...buildEpisodeInfo(context),
+                    ...buildIntroduction(context),
+                    ...buildThumbnails(context),
+                    ...buildRecommendation(context),
+                    SliverPadding(
+                      padding: EdgeInsets.only(
+                          bottom: MediaQuery.of(context).padding.bottom),
+                    )
+                  ],
+                );
+              }
+            },
+          ),
+        );
       }),
     );
   }
@@ -1009,7 +1010,7 @@ abstract class BaseComicPage<T extends Object> extends StatelessWidget {
                     children: [
                       SizedBox(
                         width: double.infinity,
-                        child: SelectableText(title?.trim() ?? "",
+                        child: AdaptiveSelectableText(title?.trim() ?? "",
                             style: const TextStyle(fontSize: 18)),
                       ),
                       const SizedBox(
@@ -1018,7 +1019,7 @@ abstract class BaseComicPage<T extends Object> extends StatelessWidget {
                       if (subTitle != null)
                         SizedBox(
                           width: double.infinity,
-                          child: SelectableText(subTitle!,
+                          child: AdaptiveSelectableText(subTitle!,
                               style: const TextStyle(fontSize: 14)),
                         ),
                       if (subTitle != null)
@@ -1583,7 +1584,7 @@ abstract class BaseComicPage<T extends Object> extends StatelessWidget {
       SliverToBoxAdapter(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(18, 10, 18, 0),
-          child: SelectableText(introduction!),
+          child: AdaptiveSelectableText(introduction!),
         ),
       ),
       const SliverPadding(padding: EdgeInsets.all(5)),

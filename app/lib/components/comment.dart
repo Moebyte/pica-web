@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'components.dart';
+import 'package:pica_comic/components/adaptive_selectable_text.dart';
 
 class CommentTile extends StatelessWidget {
   const CommentTile(
@@ -46,7 +47,7 @@ class CommentTile extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if(avatarUrl != null)
+              if (avatarUrl != null)
                 Avatar(
                   size: 58,
                   avatarUrl: avatarUrl,
@@ -56,8 +57,7 @@ class CommentTile extends StatelessWidget {
                   couldBeShown: level != null,
                   level: level ?? 0,
                 ),
-              if(leading != null)
-                leading!,
+              if (leading != null) leading!,
               const SizedBox(
                 width: 8,
               ),
@@ -67,12 +67,16 @@ class CommentTile extends StatelessWidget {
                   children: [
                     Text(
                       name,
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(
                       height: 12,
                     ),
-                    SelectableText(content, style: const TextStyle(fontSize: 15),),
+                    AdaptiveSelectableText(
+                      content,
+                      style: const TextStyle(fontSize: 15),
+                    ),
                     const SizedBox(
                       height: 4,
                     ),
@@ -84,9 +88,10 @@ class CommentTile extends StatelessWidget {
                             style: const TextStyle(fontSize: 12),
                           ),
                         const Spacer(),
-                        if(like != null)
+                        if (like != null)
                           InkWell(
-                            borderRadius: const BorderRadius.all(Radius.circular(8)),
+                            borderRadius:
+                                const BorderRadius.all(Radius.circular(8)),
                             onTap: like,
                             child: Padding(
                               padding: const EdgeInsets.fromLTRB(3, 5, 3, 5),
@@ -96,26 +101,35 @@ class CommentTile extends StatelessWidget {
                                   crossAxisAlignment: CrossAxisAlignment.center,
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
-                                    liked!?Icon(
-                                      Icons.favorite,
-                                      size: 15,
-                                      color: Theme.of(context).colorScheme.primary,
-                                    ):const Icon(
-                                      Icons.favorite_outline,
-                                      size: 15,
+                                    liked!
+                                        ? Icon(
+                                            Icons.favorite,
+                                            size: 15,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primary,
+                                          )
+                                        : const Icon(
+                                            Icons.favorite_outline,
+                                            size: 15,
+                                          ),
+                                    const SizedBox(
+                                      width: 5,
                                     ),
-                                    const SizedBox(width: 5,),
                                     Text(likes.toString())
                                   ],
                                 ),
                               ),
                             ),
                           ),
-                        if(like != null)
-                          const SizedBox(width: 16,),
-                        if(comments != null)
+                        if (like != null)
+                          const SizedBox(
+                            width: 16,
+                          ),
+                        if (comments != null)
                           InkWell(
-                            borderRadius: const BorderRadius.all(Radius.circular(8)),
+                            borderRadius:
+                                const BorderRadius.all(Radius.circular(8)),
                             onTap: onTap,
                             child: Padding(
                               padding: const EdgeInsets.fromLTRB(3, 6, 3, 5),
@@ -129,7 +143,9 @@ class CommentTile extends StatelessWidget {
                                       Icons.mode_comment_outlined,
                                       size: 15,
                                     ),
-                                    const SizedBox(width: 5,),
+                                    const SizedBox(
+                                      width: 5,
+                                    ),
                                     Text(comments.toString())
                                   ],
                                 ),

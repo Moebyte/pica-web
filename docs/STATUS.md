@@ -498,3 +498,41 @@ GatewaySync 扩展为多键：`account` / `history` / `favorites`（均为网关
 - 生产首页：历史 8 条封面全部 200，破图消失，无 403；
 - 从历史进入阅读 → 返回 → 触发同步，服务端 blob 的 8 条封面均为原始 URL；
 - 阅读器、账号恢复、批量签名等既有功能无回归。
+
+### 12.11 Web 文字选中复制 + 图片长按复制/保存（2026-11-01）
+
+**文字**
+
+- Web 端在 `MaterialApp.builder` 外包一层全局 `SelectionArea`：Flutter Web 的文字
+  画在 canvas 上，没有它浏览器无法做原生选择。桌面可拖选 + Ctrl/Cmd+C。
+- 新增 `SelectionCopyButton`：选中文字后底部浮出「复制」按钮。移动 Web 上
+  Flutter 的原生选择工具栏在 CanvasKit 下不可靠（浏览器原生菜单没有可用文本），
+  这个按钮保证手机端一定能把选中内容复制走。点按在 `pointerDown` 时立即写入剪贴板，
+  避免点击先清空选区导致复制为空。
+- 新增 `AdaptiveSelectableText`：Web 下退化为普通 `Text`（交给全局 SelectionArea），
+  原生端仍用 `SelectableText`。已替换标题、副标题、简介、评论、收藏标题等
+  6 处 `SelectableText`，避免嵌套两个选择区域导致 Web 上无法选择。
+
+**图片**
+
+- 阅读器正文图片、全屏图片查看页长按弹出底部菜单：
+  - **复制图片**：转成 PNG 后写入系统剪贴板（Async Clipboard API）；
+  - **保存图片**：按原始格式通过 Blob + `<a download>` 下载，文件名取漫画标题+章节+页码。
+- 新增 `ImageByteCache`：图片加载完成时顺手保留编码后的字节（最多 32 项 / 48MB，
+  仅 Web），复制/保存直接复用，不重新下载；缓存未命中时再按现有加载链路取一次。
+- 阅读器长按检测使用**被动 `Listener` + 定时器**，不参与手势竞技场，翻页、缩放、
+  连续滚动都不受影响；只响应图片区域（顶栏 84px、底栏 150px 内不触发）。
+  期间发现用 `GestureDetector`/任何额外 render object 直接包住
+  `PhotoViewGallery`/`ScrollablePositionedList` 会让阅读器主线程持续重绘卡死，
+  改为包在阅读器 Stack 外层后恢复正常。
+
+**实测**（生产域名，Chromium 移动视口）：
+
+- 长按标题 → 浮出 Copy → 点击后剪贴板为选中文字（多次运行分别得到 `した`、`わくわく`）；
+- 阅读器长按正文 → 菜单显示「第 N 页 · 标题」→ 复制后
+  `navigator.clipboard.read()` 返回 `[["image/png"]]`；
+- 保存图片触发下载，文件名 `...-ep1-1.jpg`，大小 339,717 字节；
+- 阅读器内 `page.evaluate` 正常返回，无卡死；
+- `flutter test` 31/31 通过。
+
+原生 Android/iOS/桌面行为保持不变（图片菜单和字节缓存仅在 Web 生效）。
