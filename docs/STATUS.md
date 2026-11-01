@@ -409,3 +409,16 @@ GatewaySync 扩展为多键：`account` / `history` / `favorites`（均为网关
   刷新不再回首页；返回一次到首页；应用不退出。
 - 快照重放改为固定使用同一个导航器（MainPage 嵌套导航器，最多等 2s 就绪），
   并补齐帧等待与栈内去重，避免多导航器混放导致返回跳页。
+
+### 12.7 两项遗留清理（同日）
+
+1. **控制台 `Refused to set unsafe header "user-agent"` 已消除**：
+   浏览器禁止脚本设置 UA/Referer/Cookie/Origin/Host，源站头在“签名图片 GET”
+   等同源请求上透传会刷警告。双层兜底：
+   - Dio 拦截器：同源请求统一剔除这些头（`logDio` / `createPicaDio` 均安装）；
+   - TunnelAdapter 同源直达分支再兜一层（复制 RequestOptions 剔除后交给浏览器栈）。
+   实测生产阅读链路（JM 正文，签名 GET）：警告 **0 次**，图片正常。
+2. **隧道响应改为流式**：`/api/tunnel` 不再 `arrayBuffer()` 整包缓冲，
+   改为 `ReadableStream.getReader()` 逐块产出 `Uint8List`；仅网关自身错误
+   （`X-Pica-Error`，体积很小）才整包读。大图/长响应的浏览器内存峰值显著下降。
+   实测：JM 阅读器翻到 30/221、刷新后从详情页「阅读」恢复到 30/221，图片全部正常。

@@ -236,20 +236,54 @@ class AppHttpAdapter implements HttpClientAdapter{
   }
 }
 
+/// 浏览器禁止脚本设置 User-Agent/Referer/Cookie/Origin/Host 等头。
+/// 同源请求（签名图片 GET、网关 API）本来就由浏览器自动处理这些，
+/// 若上游代码把源站头透传过来，浏览器会刷 "Refused to set unsafe header"。
+/// 这里在 Dio 层对同源请求统一剔除，跨域请求保持不变（隧道会正确编码）。
+class _SameOriginForbiddenHeaderSanitizer extends Interceptor {
+  static const _forbidden = {
+    "user-agent",
+    "referer",
+    "cookie",
+    "origin",
+    "host",
+    "content-length",
+    "accept-encoding",
+  };
+
+  @override
+  void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
+    if (kIsWeb) {
+      final base = Uri.base;
+      final uri = options.uri;
+      if (uri.scheme == base.scheme &&
+          uri.host == base.host &&
+          uri.port == base.port) {
+        options.headers.removeWhere(
+            (key, _) => _forbidden.contains(key.toLowerCase()));
+      }
+    }
+    handler.next(options);
+  }
+}
+
 /// Creates a Dio instance with the platform transport adapter installed.
 ///
 /// Native: `IOHttpClientAdapter` (same as before for raw `Dio()` instances).
 /// Web: `TunnelAdapter`, so every cross-origin comic request goes through the
 /// gateway tunnel instead of the browser's CORS-restricted network stack.
 Dio createPicaDio([BaseOptions? options]) {
-  var dio = Dio(options);
+  var dio = Dio(options)
+    ..interceptors.add(_SameOriginForbiddenHeaderSanitizer());
   dio.httpClientAdapter =
       createPlatformHttpAdapterSync(http2: false, proxy: null);
   return dio;
 }
 
 Dio logDio([BaseOptions? options, bool http2 = false]) {
-  var dio = Dio(options)..interceptors.add(MyLogInterceptor());
+  var dio = Dio(options)
+    ..interceptors.add(MyLogInterceptor())
+    ..interceptors.add(_SameOriginForbiddenHeaderSanitizer());
   dio.httpClientAdapter = AppHttpAdapter(http2);
   return dio;
 }
