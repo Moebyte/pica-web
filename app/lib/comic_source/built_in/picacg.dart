@@ -39,7 +39,7 @@ final picacg = ComicSource.named(
     title: "Picacg",
     key: "picacg",
     categories: [
-      const FixedCategoryPart("分类", _categories, "category"),
+      const FixedCategoryPart("分类", picacgCategoryNames, "category"),
     ],
     enableRankingPage: true,
     buttons: [
@@ -274,7 +274,9 @@ class _PicComicTile extends ComicTile {
   final List<ComicTileMenuOption>? addonMenuOptions;
 }
 
-const _categories = [
+/// picacg 的顶层分类名，可在 advanced-search 的 `categories` 中作为 AND 过滤条件。
+/// 注意：这是分类，不是普通标签（如 肉便器）。
+const picacgCategoryNames = [
   "大家都在看",
   "大濕推薦",
   "那年今天",

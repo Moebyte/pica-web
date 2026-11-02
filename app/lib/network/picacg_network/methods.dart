@@ -83,7 +83,7 @@ class PicacgNetwork {
   }
 
   Future<Res<Map<String, dynamic>>> post(
-      String url, Map<String, String>? data) async {
+      String url, Map<String, dynamic>? data) async {
     var api = "https://picaapi.picacomic.com";
     if (token == "" &&
         url != '$api/auth/sign-in' &&
@@ -275,11 +275,29 @@ class PicacgNetwork {
   }
 
   ///搜索
+  ///
+  /// picacg 的 advanced-search 真正支持的是：
+  /// - `keyword`：一个关键词（标签/标题/作者文本）；
+  /// - `categories`：分类名数组，服务端按 AND 过滤（NTR、同人、全彩等）。
+  ///
+  /// [requiredTags] / [excludedTags] 用于接口无法表达的额外标签条件，
+  /// 在当前页结果中做客户端过滤（标题/作者/标签命中均算）。
   Future<Res<List<ComicItemBrief>>> search(
       String keyWord, String sort, int page,
-      {bool addToHistory = false}) async {
-    var response = await post('$apiUrl/comics/advanced-search?page=$page',
-        {"keyword": keyWord, "sort": sort});
+      {bool addToHistory = false,
+      List<String>? categories,
+      List<String>? requiredTags,
+      List<String>? excludedTags}) async {
+    final payload = <String, dynamic>{"keyword": keyWord, "sort": sort};
+    final cats = (categories ?? const <String>[])
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    if (cats.isNotEmpty) {
+      payload["categories"] = cats;
+    }
+    var response =
+        await post('$apiUrl/comics/advanced-search?page=$page', payload);
     if (page == 1 && addToHistory && keyWord != "") {
       appdata.searchHistory.remove(keyWord);
       appdata.searchHistory.add(keyWord);
@@ -299,6 +317,14 @@ class PicacgNetwork {
               res["data"]["comics"]["docs"][i]["tags"] ?? []));
           tags.addAll(List<String>.from(
               res["data"]["comics"]["docs"][i]["categories"] ?? []));
+          if (!_matchesSearchTerms(
+              tags,
+              res["data"]["comics"]["docs"][i]["title"] ?? "",
+              res["data"]["comics"]["docs"][i]["author"] ?? "",
+              requiredTags,
+              excludedTags)) {
+            continue;
+          }
           var si = ComicItemBrief(
               res["data"]["comics"]["docs"][i]["title"] ?? "Unknown",
               res["data"]["comics"]["docs"][i]["author"] ?? "Unknown",
@@ -328,6 +354,55 @@ class PicacgNetwork {
     } catch (e, s) {
       LogManager.addLog(LogLevel.error, "Data Analysis", "$e\n$s");
       return Res(null, errorMessage: e.toString());
+    }
+  }
+
+  /// 额外标签条件的本地过滤：标签精确命中，或标题/作者包含该词。
+  bool _matchesSearchTerms(
+    List<String> tags,
+    String title,
+    String author,
+    List<String>? required,
+    List<String>? excluded,
+  ) {
+    bool hit(String term) =>
+        tags.contains(term) || title.contains(term) || author.contains(term);
+    if (required != null) {
+      for (final term in required) {
+        if (term.isNotEmpty && !hit(term)) {
+          return false;
+        }
+      }
+    }
+    if (excluded != null) {
+      for (final term in excluded) {
+        if (term.isNotEmpty && hit(term)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  /// 获取某个标签/分类组合的总数，用于多标签时选择更窄的关键词。
+  Future<int?> searchTotal(String keyword, {List<String>? categories}) async {
+    final payload = <String, dynamic>{"keyword": keyword, "sort": "dd"};
+    final cats = (categories ?? const <String>[])
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    if (cats.isNotEmpty) {
+      payload["categories"] = cats;
+    }
+    final response =
+        await post('$apiUrl/comics/advanced-search?page=1', payload);
+    if (response.error) {
+      return null;
+    }
+    try {
+      return int.tryParse(response.data["data"]["comics"]["total"].toString());
+    } catch (_) {
+      return null;
     }
   }
 
@@ -581,7 +656,7 @@ class PicacgNetwork {
               tags,
               pages: res["data"]["comics"][i]["pagesCount"]);
           comics.add(si);
-        }  finally {}
+        } finally {}
       }
     } else {
       return Res.fromErrorRes(response);
@@ -636,7 +711,7 @@ class PicacgNetwork {
           pages: res["data"]["comics"][i]["pagesCount"],
         );
         comics.add(si);
-      }  finally {}
+      } finally {}
     }
     return Res(comics, subData: 1);
   }
@@ -816,7 +891,7 @@ class PicacgNetwork {
             tags,
           );
           comics.add(si);
-        }  finally {}
+        } finally {}
       }
     } else {
       return Res.fromErrorRes(response);
@@ -852,7 +927,7 @@ class PicacgNetwork {
           //出现错误跳过
         }
       }
-    }  finally {}
+    } finally {}
     try {
       for (int i = 0; i < res["data"]["collections"][1]["comics"].length; i++) {
         try {
@@ -870,7 +945,7 @@ class PicacgNetwork {
           comics[1].add(si);
         } finally {}
       }
-    }  finally {}
+    } finally {}
     return Res(comics);
   }
 

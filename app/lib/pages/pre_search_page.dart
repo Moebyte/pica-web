@@ -7,6 +7,7 @@ import 'package:pica_comic/foundation/pair.dart';
 import 'package:pica_comic/foundation/ui_mode.dart';
 import 'package:pica_comic/pages/comic_page.dart';
 import 'package:pica_comic/components/tag_search_sheet.dart';
+import 'package:pica_comic/pages/picacg/tag_search_page.dart';
 import 'package:pica_comic/pages/search_result_page.dart';
 import 'package:pica_comic/tools/app_links.dart';
 import 'package:pica_comic/tools/extensions.dart';
@@ -613,7 +614,17 @@ class PreSearchPage extends StatelessWidget {
                       sourceKey: logic.target,
                     );
                     if (selected == null || selected.isEmpty) return;
-                    search(selected.join(" "), logic.target);
+                    if (logic.target == "picacg") {
+                      if (!context.mounted) return;
+                      context.to(() => PicacgTagSearchPage(
+                            tags: selected,
+                            sort: logic.options.isNotEmpty
+                                ? logic.options.first
+                                : "dd",
+                          ));
+                    } else {
+                      search(selected.join(" "), logic.target);
+                    }
                   },
                   icon: const Icon(Icons.filter_alt_outlined, size: 18),
                   label: Text("多标签组合".tl),

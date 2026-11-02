@@ -25,6 +25,7 @@ import 'package:pica_comic/network/server_downloads.dart';
 import 'package:pica_comic/pages/favorites/local_favorites.dart';
 import 'package:pica_comic/pages/reader/comic_reading_page.dart';
 import 'package:pica_comic/components/tag_search_sheet.dart';
+import 'package:pica_comic/pages/picacg/tag_search_page.dart';
 import 'package:pica_comic/pages/search_result_page.dart';
 import 'package:pica_comic/tools/tags_translation.dart';
 import 'package:pica_comic/tools/translations.dart';
@@ -1417,10 +1418,14 @@ abstract class BaseComicPage<T extends Object> extends StatelessWidget {
                           selected.isEmpty) {
                         return;
                       }
-                      context.to(() => SearchResultPage(
-                            keyword: selected.join(" "),
-                            sourceKey: sourceKey,
-                          ));
+                      if (sourceKey == "picacg") {
+                        context.to(() => PicacgTagSearchPage(tags: selected));
+                      } else {
+                        context.to(() => SearchResultPage(
+                              keyword: selected.join(" "),
+                              sourceKey: sourceKey,
+                            ));
+                      }
                     },
                     icon: const Icon(Icons.filter_alt_outlined, size: 18),
                     label: Text("多标签".tl),

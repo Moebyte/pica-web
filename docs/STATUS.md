@@ -539,9 +539,9 @@ GatewaySync 扩展为多键：`account` / `history` / `favorites`（均为网关
 
 ### 12.12 多标签组合检索（2026-11-02）
 
-**背景**：此前点击标签只会把单个标签代入搜索；但 picacg 的
-`advanced-search` 实际支持空格分隔的 AND 语义（`全彩 巨乳` = 同时包含），
-前缀 `-` 表示排除。前端只是缺少组合入口。
+**背景**：此前点击标签只会把单个标签代入搜索。当时误以为
+`advanced-search` 的空格是 AND 语义；后续实测发现空格只是**短语匹配**，
+真正的 AND 过滤是 `categories` 数组（见 §12.14）。
 
 **新增入口**
 
@@ -601,4 +601,41 @@ GatewaySync 扩展为多键：`account` / `history` / `favorites`（均为网关
 - 同一场景对 `/api/store/account` 注入 3 秒延迟（模拟 WG）：仍然直接进首页，
   不误判为首次；
 - 网关 `account` blob 已包含 `firstUse: ["1","1","1","1","1"]`；
+- `flutter test` 31/31 通过。
+
+### 12.14 多标签检索修正：`categories` 才是 AND（2026-11-02）
+
+**问题**：用户在「多标签组合」里选 `肉便器 + NTR`，只返回 1 部且不是想看的。
+
+**根因**：§12.12 的实现把选中项用空格拼成一个 `keyword`。实测抓包确认
+`advanced-search` 对 `keyword:"肉便器 NTR"` 只返回 `total:1`——空格在
+`keyword` 里是**短语匹配**，不是标签 AND。真正的多条件参数是
+`categories`（数组），且多个分类之间是 AND。
+
+**接口实测**
+
+| 请求 | total |
+|---|---|
+| `keyword:"肉便器 NTR"` | 1（错误用法） |
+| `keyword:"肉便器", categories:["NTR"]` | 883 |
+| `keyword:"肉便器", categories:["NTR","同人"]` | 361 |
+| `keyword:"", categories:["NTR","同人"]` | 正常返回 |
+| `categories:["肉便器"]` | 0（普通标签不能放进 categories） |
+
+**实现**
+
+- 新增 `PicacgTagSearchPage`：按 `picacgCategoryNames` 把选中项分成
+  **分类**（NTR/同人/全彩/人妻…）和**普通标签**（肉便器、巨乳…）。
+- 分类全部放进 `categories`（服务端 AND）；普通标签取一个作为 `keyword`。
+  多个普通标签时先并发查询各自的总数，选**最窄**的作为关键词，其余在结果页
+  按标题/作者/标签做客户端过滤；`-标签` 同样作为排除条件过滤。
+- 搜索页和漫画详情页的「多标签」入口在 picacg 下都进入新页面；
+  JM 仍走原来的关键词搜索（JM 接口没有等价的标签数组）。
+
+**验证**
+
+- `肉便器 + NTR`：请求确认 `{keyword:"肉便器", categories:["NTR"]}`，
+  结果 883 条，结果卡片同时出现肉便器/NTR；
+- `NTR + 同人`（纯分类）：正常返回，结果同时带两个分类；
+- `肉便器 + 巨乳`（两个普通标签）：自动选窄关键词并在结果中过滤，结果同时含两者；
 - `flutter test` 31/31 通过。
