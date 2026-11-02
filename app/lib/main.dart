@@ -48,6 +48,14 @@ void main(List<String> args) {
           "${details.exception}\n${details.stack}");
     };
     notFirstUse = appdata.firstUse[3] == "1";
+    if (kIsWeb) {
+      // 引导完成状态现在随账号 blob 存在服务端。新设备本地 firstUse 是空的，
+      // 只要服务端已有账号数据就说明是老用户；恢复超时/失败时也按老用户处理，
+      // 避免慢网络下新设备反复看到引导。
+      notFirstUse = notFirstUse ||
+          GatewaySync.instance.hasRemoteAccount ||
+          GatewaySync.instance.accountRestoreUncertain;
+    }
     // Web: read the navigation snapshot before building the first route so the
     // main page can start on the tab the user was on. The rest of the stack is
     // replayed after the first frame.

@@ -56,6 +56,15 @@ class GatewaySync {
 
   bool get enabled => kIsWeb;
 
+  /// 服务端确实存在账号数据（说明这台机器以前已经完成过引导/登录）。
+  bool _hasRemoteAccount = false;
+
+  bool get hasRemoteAccount => _hasRemoteAccount;
+
+  /// 启动时没能确认服务端状态（超时或请求失败）。Web 上把它当作“老用户”
+  /// 处理，避免慢网络下新设备误进引导页。
+  bool accountRestoreUncertain = false;
+
   String _endpoint(String key) =>
       Uri.base.resolve('/api/store/$key').toString();
 
@@ -81,15 +90,18 @@ class GatewaySync {
         if (value is String && value.isNotEmpty) {
           var blob = jsonDecode(value);
           if (blob is Map<String, dynamic>) {
+            _hasRemoteAccount = true;
             await applyBlob(blob);
-            log("Restored account state from gateway "
-                "(${(blob['sources'] as Map?)?.length ?? 0} sources, "
-                "${(blob['cookies'] as List?)?.length ?? 0} cookies)",
+            log(
+                "Restored account state from gateway "
+                    "(${(blob['sources'] as Map?)?.length ?? 0} sources, "
+                    "${(blob['cookies'] as List?)?.length ?? 0} cookies)",
                 "GatewaySync");
           }
         }
       }
     } catch (e) {
+      accountRestoreUncertain = true;
       log("restore failed: $e", "GatewaySync", LogLevel.warning);
     } finally {
       if (!_accountRestoreDone.isCompleted) _accountRestoreDone.complete();
@@ -126,7 +138,8 @@ class GatewaySync {
             // 首次双端都有数据：并集合并后把合并结果推回服务端
             schedulePush();
           }
-          log("Restored $key (first sync, merge=${!localEmpty})", "GatewaySync");
+          log("Restored $key (first sync, merge=${!localEmpty})",
+              "GatewaySync");
         } else {
           _import(key, data, replace: true);
           await prefs.setInt('gsync.rev.$key', updated);
@@ -237,6 +250,7 @@ class GatewaySync {
       'v': 1,
       'updated': DateTime.now().millisecondsSinceEpoch ~/ 1000,
       'implicitData': List<String>.from(appdata.implicitData),
+      'firstUse': List<String>.from(appdata.firstUse),
       'settings': settings,
       'sources': sources,
       if (jar != null) 'cookies': jar.exportRows(),
@@ -248,7 +262,9 @@ class GatewaySync {
   Future<void> applyBlob(Map<String, dynamic> blob) async {
     final implicit = blob['implicitData'];
     if (implicit is List && implicit.isNotEmpty) {
-      for (var i = 0; i < implicit.length && i < appdata.implicitData.length; i++) {
+      for (var i = 0;
+          i < implicit.length && i < appdata.implicitData.length;
+          i++) {
         appdata.implicitData[i] = implicit[i].toString();
       }
       appdata.writeImplicitData();
@@ -263,6 +279,18 @@ class GatewaySync {
         }
       });
       await appdata.updateSettings(false);
+    }
+
+    final firstUse = blob['firstUse'];
+    if (firstUse is List && firstUse.isNotEmpty) {
+      for (var i = 0; i < firstUse.length && i < appdata.firstUse.length; i++) {
+        // 只把已完成的标记合并进来，避免旧备份把本地的引导状态改回未完成。
+        if (firstUse[i].toString() == "1") {
+          appdata.firstUse[i] = "1";
+        }
+      }
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList("firstUse", appdata.firstUse);
     }
 
     final sources = blob['sources'];
@@ -281,7 +309,8 @@ class GatewaySync {
         final incoming = entry.value is Map
             ? Map<String, dynamic>.from(entry.value as Map)
             : <String, dynamic>{};
-        await s.setString(storageKey, jsonEncode(mergeSourceData(stored, incoming)));
+        await s.setString(
+            storageKey, jsonEncode(mergeSourceData(stored, incoming)));
       }
     }
 

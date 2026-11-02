@@ -572,3 +572,33 @@ GatewaySync 扩展为多键：`account` / `history` / `favorites`（均为网关
 
 **范围**：当前仅对 picacg/JM 开放（其他源的标签语法不同，避免拼错）。
 暂不支持面板内切换 OR；多空格标签会按空格拆分，需用官方支持的引号语法时请在搜索框手动输入。
+
+### 12.13 新设备不再重复出现引导页（2026-11-02）
+
+**现象**：每换一台设备/浏览器打开网页都会重新走一遍欢迎引导。
+
+**根因**：`appdata.firstUse[3]`（是否进入过 app）只写在浏览器
+`shared_preferences`/IndexedDB 里；新设备本地存储为空，必然判定为首次使用。
+服务端账号 blob 里没有这个标记，账号/历史/收藏能恢复，但引导状态不能。
+
+**修复**
+
+- `GatewaySync.buildBlob()` 增加 `firstUse` 字段，账号备份现在包含引导状态；
+  首次完成引导后 `MainPage` 的 `writeData()` 会把它推到网关。
+- `applyBlob()` 合并 `firstUse` 时只保留已完成的 `"1"` 标记，避免旧备份把
+  新设备已完成的引导改回未完成。
+- Web 路由判定：只要满足任一条件就跳过引导：
+  1. 本地 `firstUse[3] == "1"`；
+  2. 网关账号 blob 存在（`hasRemoteAccount`，说明这台服务器以前用过）；
+  3. 启动时账号恢复超时/失败（`accountRestoreUncertain`），无法确认是否首次。
+- 真正的全新部署（网关没有账号数据且恢复成功）仍会显示一次引导；
+  Android/iOS/桌面行为不变。
+
+**实测**
+
+- 全新 Chromium 上下文、**不注入任何本地 firstUse**：直接进入首页，
+  History(14)、3 个账号正常，无欢迎页；
+- 同一场景对 `/api/store/account` 注入 3 秒延迟（模拟 WG）：仍然直接进首页，
+  不误判为首次；
+- 网关 `account` blob 已包含 `firstUse: ["1","1","1","1","1"]`；
+- `flutter test` 31/31 通过。

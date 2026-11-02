@@ -41,16 +41,16 @@ Future<void> init() async {
     // opened (no-op on native platforms).
     await initWebDatabase();
     io.File? logFile = kIsWeb ? null : io.File("${App.dataPath}/log.txt");
-    if(!kIsWeb && App.isAndroid) {
+    if (!kIsWeb && App.isAndroid) {
       var externalDirectory = await getExternalStorageDirectory();
       if (externalDirectory != null) {
         logFile = io.File("${externalDirectory.path}/log.txt");
       }
     }
-    if(!kIsWeb && App.isIOS) {
+    if (!kIsWeb && App.isIOS) {
       logFile = null;
     }
-    if(logFile?.existsSync() ?? false) {
+    if (logFile?.existsSync() ?? false) {
       await logFile?.delete();
     }
     LogManager.logFile = logFile;
@@ -65,6 +65,7 @@ Future<void> init() async {
       await accountRestore.timeout(const Duration(milliseconds: 1200),
           onTimeout: () {
         timedOut = true;
+        GatewaySync.instance.accountRestoreUncertain = true;
       });
       if (timedOut) {
         accountRestore.whenComplete(_refreshAfterLateAccountRestore);
@@ -80,7 +81,7 @@ Future<void> init() async {
     if (App.isAndroid) {
       final appLinks = AppLinks();
       appLinks.allUriLinkStream.listen((uri) async {
-        while(App.mainNavigatorKey == null) {
+        while (App.mainNavigatorKey == null) {
           await Future.delayed(const Duration(milliseconds: 100));
         }
         handleAppLinks(uri);
@@ -135,8 +136,8 @@ Future<void> _refreshAfterLateAccountRestore() async {
     LogManager.addLog(LogLevel.info, "GatewaySync",
         "late account restore applied; sources reloaded");
   } catch (e, s) {
-    LogManager.addLog(LogLevel.error, "GatewaySync",
-        "late account refresh failed: $e\n$s");
+    LogManager.addLog(
+        LogLevel.error, "GatewaySync", "late account refresh failed: $e\n$s");
   }
 }
 
@@ -251,7 +252,7 @@ Future<void> _checkAccountData() async {
     await picacg.saveData();
     await s.remove('picacgAccount');
   }
-  if(s.getString("jmName") != null) {
+  if (s.getString("jmName") != null) {
     var account = s.getString('jmName');
     var pwd = s.getString('jmPwd');
     jm.data['account'] = [account, pwd];
@@ -259,13 +260,13 @@ Future<void> _checkAccountData() async {
     await s.remove("jmName");
     await jm.saveData();
   }
-  if(s.getString("ehAccount") != null) {
+  if (s.getString("ehAccount") != null) {
     ehentai.data['account'] = 'ok';
     ehentai.data['name'] = s.getString("ehAccount")!;
     await s.remove("ehAccount");
     await ehentai.saveData();
   }
-  if(s.getString('htName') != null) {
+  if (s.getString('htName') != null) {
     var account = s.getString('htName');
     var pwd = s.getString('htPwd');
     htManga.data['account'] = [account, pwd];
@@ -274,7 +275,7 @@ Future<void> _checkAccountData() async {
     await htManga.saveData();
   }
   NhentaiNetwork().init();
-  if(NhentaiNetwork().logged) {
+  if (NhentaiNetwork().logged) {
     nhentai.data['account'] = 'ok';
     await nhentai.saveData();
   }
